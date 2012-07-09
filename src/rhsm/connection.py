@@ -1,6 +1,8 @@
-# A proxy interface to initiate and interact with candlepin.
+# A proxy interface to initiate and interact communication with Unified Entitlement Platform server such as candlepin.
 #
-# Copyright (c) 2010 - 2012 Red Hat, Inc.
+# Copyright (c) 2010 Red Hat, Inc.
+#
+# Authors: Pradeep Kilambi <pkilambi@redhat.com>
 #
 # This software is licensed to you under the GNU General Public License,
 # version 2 (GPLv2). There is NO WARRANTY for this software, express or
@@ -21,11 +23,11 @@ import base64
 import os
 import logging
 
+import socket
 from M2Crypto import SSL, httpslib
 from urllib import urlencode
 
 from config import initConfig
-
 
 class NullHandler(logging.Handler):
     def emit(self, record):
@@ -45,6 +47,13 @@ logging.getLogger("rhsm").addHandler(h)
 log = logging.getLogger(__name__)
 
 config = initConfig()
+
+# Set the default timeout. httplib on python <= 2.4 requires that
+# the timeout be set on the socket. This can get messy. Instead,
+# we set the timeout to match the default on RHEL6.3+ (~ 1 min). Allowing it
+# to be overridden in the config in case we need to bump it.
+socket.setdefaulttimeout(config.getfloat("server", "connection_timeout"))
+log.debug("Defaulting connection timeout to %f seconds" % socket.getdefaulttimeout())
 
 
 class ConnectionException(Exception):
@@ -332,6 +341,7 @@ class Restlib(object):
         if body is None:
             headers = dict(self.headers.items() + \
                     {"Content-Length": "0"}.items())
+
         conn.request(request_type, handler, body=body, headers=headers)
 
         response = conn.getresponse()

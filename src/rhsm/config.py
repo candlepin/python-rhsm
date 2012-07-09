@@ -45,6 +45,8 @@ DEFAULTS = {
                 'proxy_port': '',
                 'proxy_user': '',
                 'proxy_password': '',
+                # timeout in seconds (float)
+                'connection_timeout': '60.0',
                 'insecure': '0',
                 'baseurl': 'https://cdn.redhat.com',
                 'manage_repos': '1',
