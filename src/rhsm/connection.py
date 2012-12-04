@@ -24,6 +24,7 @@ import os
 import logging
 
 from M2Crypto import SSL, httpslib
+from M2Crypto.SSL import SSLError
 from urllib import urlencode
 
 from config import initConfig
@@ -114,6 +115,14 @@ class RemoteServerException(ConnectionException):
     def __str__(self):
         return "Server returned %s" % self.code
 
+class InvalidConsumerException(ConnectionException):
+
+    def __init__(self, cert_path):
+        """ Pass the full path to the bad certificate. """
+        self.cert_path = cert_path
+
+    def __str__(self):
+        return "Your identity certificate is invalid or expired"
 
 class NoOpChecker:
 
@@ -358,7 +367,13 @@ class Restlib(object):
         if body is None:
             headers = dict(self.headers.items() + \
                     {"Content-Length": "0"}.items())
-        conn.request(request_type, handler, body=body, headers=headers)
+        try:
+            conn.request(request_type, handler, body=body, headers=headers)
+        except SSLError, e:
+            log.exception(e)
+            if method.startswith('/consumers/'):
+                raise InvalidConsumerException(self.cert_file)
+            raise Exception("SSL Error %s:" % e)
 
         response = conn.getresponse()
         result = {
