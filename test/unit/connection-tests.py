@@ -17,7 +17,7 @@ import unittest
 
 from rhsm.connection import UEPConnection, ConnectionException, ConnectionSetupException, \
         BadCertificateException, RestlibException, GoneException, NetworkException, \
-        RemoteServerException
+        RemoteServerException, InvalidConsumerException
 
 from mock import Mock
 from datetime import date
@@ -133,3 +133,10 @@ class GoneExceptionTest(ExceptionTest):
     def test_even_less_int_code(self):
         self.code = "asdfzczcvzcv"
         self._test()
+
+class InvalidConsumerTest(ExceptionTest):
+    exception = InvalidConsumerException
+
+    def _create_exception(self, *args, **kwargs):
+        kwargs['cert_path'] = "/etc/sdfsd"
+        return self.exception(*args, **kwargs)
