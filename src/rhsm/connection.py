@@ -106,6 +106,15 @@ class NetworkException(ConnectionException):
         return "Network error code: %s" % self.code
 
 
+class AcceptedException(ConnectionException):
+
+    def __init__(self, code):
+        self.code = code
+
+    def __str__(self):
+        return "Accepted response code: %s" % self.code
+
+
 class RemoteServerException(ConnectionException):
 
     def __init__(self, code):
@@ -377,6 +386,10 @@ class Restlib(object):
         return json.loads(result['content'])
 
     def validateResponse(self, response):
+        # todo: this might get moved down if json is coming back from rcs
+        if str(response['status']) == "202":
+            raise AcceptedException(response['status'])
+
         if str(response['status']) not in ["200", "204"]:
             parsed = {}
             try:
@@ -421,6 +434,52 @@ class Restlib(object):
 
     def request_delete(self, method):
         return self._request("DELETE", method)
+
+
+class SpliceConnection:
+    """
+    class for talking to splice
+    """
+
+    def __init__(self, host=None, ssl_port=None, handler=None,
+                rhic=None, insecure=None, ca_cert_dir=None, rhic_ca_cert=None):
+        self.host = host or config.get('splice', 'hostname')
+        self.ssl_port = ssl_port or safe_int(config.get('splice', 'port'))
+        self.ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
+        self.rhic = rhic or config.get('splice', 'rhic')
+        self.ca_cert_dir = ca_cert_dir or config.get('splice', 'ca_cert_dir')
+        self.handler = handler or config.get('splice', 'prefix')
+        self.rhic_ca_cert = rhic_ca_cert or config.get('splice', 'rhic_ca_cert')
+
+        self.insecure = insecure
+        if insecure is None:
+            self.insecure = False
+            config_insecure = safe_int(config.get('splice', 'insecure'))
+            if config_insecure:
+                self.insecure = True
+
+        self.conn = Restlib(self.host, self.ssl_port, self.handler,
+                            cert_file=self.rhic, ca_dir=self.ca_cert_dir, insecure=self.insecure,
+                            ssl_verify_depth=self.ssl_verify_depth)
+        log.info("Using rhic authentication: rhic = %s, "
+                 "ca = %s, insecure = %s" %
+                 (self.rhic, self.ca_cert_dir, self.insecure))
+
+    def getCerts(self, identity_cert, consumer_identifier, installed_products=None, facts_dict={}):
+        params = {}
+        params['identity_cert'] = identity_cert.x509.as_pem()
+        params['consumer_identifier'] = consumer_identifier
+        params['products'] = installed_products
+        params['system_facts'] = facts_dict
+
+        response = self.conn.request_put("/api/v1/entitlement/%s/" % identity_cert.subject['CN'], params)
+
+        to_return = {}
+        to_return['cert'] = response['certs'][0][0]
+        to_return['key'] = response['certs'][0][1]
+        to_return['serial'] = response['certs'][0][2]
+
+        return to_return
 
 
 # FIXME: there should probably be a class here for just
