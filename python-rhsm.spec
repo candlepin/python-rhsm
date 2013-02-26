@@ -25,6 +25,7 @@ Requires: python-simplejson
 Requires: python-iniparse
 Requires: rpm-python
 
+BuildRequires: gcc
 BuildRequires: python2-devel
 BuildRequires: python-setuptools
 BuildRequires: openssl-devel
