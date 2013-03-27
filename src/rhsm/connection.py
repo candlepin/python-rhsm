@@ -846,7 +846,7 @@ class UEPConnection:
         method = "/consumers/%s/entitlements" % self.sanitize(consumerId)
         return self.conn.request_delete(method)
 
-    def checkin(self, consumerId, checkin_date=None ):
+    def checkin(self, consumerId, checkin_date=None):
         method = "/consumers/%s/checkin" % self.sanitize(consumerId)
         # add the optional date to the url
         if checkin_date:
