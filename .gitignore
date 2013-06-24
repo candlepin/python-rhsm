@@ -1,5 +1,7 @@
 *.pyc
 *.sw?
 *.so
+# we generate this guy from setup.py
+src/rhsm/version.py
 build
 *egg-info

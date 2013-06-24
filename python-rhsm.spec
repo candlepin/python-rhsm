@@ -39,6 +39,8 @@ entitlements, certificates, and access to content.
 
 %build
 %{__python} setup.py build
+# create a version.py with the rpm version info
+%{__python} setup.py build_py --rpm-version %{version} --rpm-release %{release}
 
 %install
 rm -rf %{buildroot}
