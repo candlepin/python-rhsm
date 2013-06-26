@@ -72,8 +72,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         response = {'status': status,
                     'content': content}
         #print "response", response
-        #self.restlib.validateResponse(response, self.request_type, self.handler)
-        self.restlib.validateResponse(response)
+        self.restlib.validateResponse(response, self.request_type, self.handler)
 
     # All empty responses that aren't 200/204 raise a NetworkException
     def test_200_empty(self):
@@ -100,7 +99,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
             self.assertEquals("202", e.code)
 #            self.assertEquals(self.request_type, e.request_type)
 #            self.assertEquals(self.handler, e.handler)
-#            self.assertTrue(e.msg is "")
+            self.assertTrue(e.msg is "")
         else:
             self.fail("Should of raised a Restlib exception")
 
@@ -132,10 +131,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
         try:
             self.vr("404", "")
         except RemoteServerException, e:
-            #self.assertEquals(self.request_type, e.request_type)
-            #self.assertEquals(self.handler, e.handler)
+            self.assertEquals(self.request_type, e.request_type)
+            self.assertEquals(self.handler, e.handler)
             self.assertEquals("404", e.code)
-        #    self.assertEquals("Server error attempting a GET to https://server/path returned status 404", str(e))
+            self.assertEquals("Server error attempting a GET to https://server/path returned status 404", str(e))
         else:
             self.fails("Should of raise RemoteServerException")
 
@@ -145,7 +144,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
             self.vr("404", content)
         except RestlibException, e:
             self.assertEquals("404", e.code)
-        #    self.assertEquals("", e.msg)
+            self.assertEquals("", e.msg)
         else:
             self.fails("Should of raised a RemoteServerException")
 
@@ -177,9 +176,8 @@ class RestlibValidateResponseTests(unittest.TestCase):
         try:
             self.vr("410", "")
         except RemoteServerException, e:
-            pass
-            #self.assertEquals(self.request_type, e.request_type)
-            #self.assertEquals(self.handler, e.handler)
+            self.assertEquals(self.request_type, e.request_type)
+            self.assertEquals(self.handler, e.handler)
         else:
             self.fail("RemoteServerException expected")
 
@@ -199,9 +197,8 @@ class RestlibValidateResponseTests(unittest.TestCase):
         try:
             self.vr("500", "")
         except RemoteServerException, e:
-            pass
-            #self.assertEquals(self.request_type, e.request_type)
-            #self.assertEquals(self.handler, e.handler)
+            self.assertEquals(self.request_type, e.request_type)
+            self.assertEquals(self.handler, e.handler)
         else:
             self.fail("RemoteServerException expected")
 
