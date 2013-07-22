@@ -17,6 +17,7 @@
 import base64
 import certificate
 import datetime
+import gettext
 import locale
 import logging
 import os
@@ -32,6 +33,10 @@ from urllib import urlencode
 
 from config import initConfig
 from version import Versions
+
+from subscription_manager.cli import system_exit
+
+_ = gettext.gettext
 
 # on EL5, there is a really long socket timeout. The
 # best thing we can do is set a process wide default socket timeout.
@@ -425,7 +430,11 @@ class Restlib(object):
                 id_cert = certificate.create_from_file(self.cert_file)
                 if not id_cert.is_valid():
                     raise ExpiredIdentityCertException()
-            raise e
+            log.error(u"Error: There is a certificate credential issue between this unit and the entitlement server." +
+                     " Error type: %s" % e)
+            system_exit(-1, _("Error: There is a certificate credential issue between this unit and the entitlement server." +
+                " Please view the log at /var/log/rhsm/rhsm.log for additional details."))
+
         response = conn.getresponse()
         result = {
             "content": response.read(),
