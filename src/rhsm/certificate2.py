@@ -216,12 +216,12 @@ class _CertFactory(object):
         return order
 
     def _parse_v1_content(self, extensions):
-        content = []
+        contents = []
         ents = extensions.find("2.*.*.1")
         for ent in ents:
             oid = ent[0].rtrim(1)
             content_ext = extensions.branch(oid)
-            content.append(Content(
+            content = Content(
                 content_type=extensions.get(oid),
                 name=content_ext.get('1'),
                 label=content_ext.get('2'),
@@ -230,9 +230,9 @@ class _CertFactory(object):
                 gpg=content_ext.get('7'),
                 enabled=content_ext.get('8'),
                 metadata_expire=content_ext.get('9'),
-                required_tags=parse_tags(content_ext.get('10')),
-            ))
-        return content
+                required_tags=parse_tags(content_ext.get('10')))
+            contents.append(content)
+        return contents
 
     def _get_v1_cert_type(self, extensions):
         # Assume if there is an order name, it must be an entitlement cert:
@@ -336,10 +336,10 @@ class _CertFactory(object):
         return products
 
     def _parse_v3_content(self, payload):
-        content = []
+        contents = []
         for product in payload['products']:
             for c in product['content']:
-                content.append(Content(
+                content = Content(
                     content_type=c['type'],
                     name=c['name'],
                     label=c['label'],
@@ -350,8 +350,10 @@ class _CertFactory(object):
                     metadata_expire=c.get('metadata_expire', None),
                     required_tags=c.get('required_tags', []),
                     arches=c.get('arches', []),
-                ))
-        return content
+                    cdn=c.get('cdn', None),
+                    ca_cert=c.get('ca_cert', None))
+                contents.append(content)
+        return contents
 
     def _parse_v3_pool(self, payload):
         pool = payload.get('pool', None)
@@ -717,7 +719,8 @@ class Order(object):
 class Content(object):
 
     def __init__(self, content_type=None, name=None, label=None, vendor=None, url=None,
-            gpg=None, enabled=None, metadata_expire=None, required_tags=None, arches=None):
+            gpg=None, enabled=None, metadata_expire=None, required_tags=None, arches=None,
+            cdn=None, ca_cert=None):
 
         if (name is None) or (label is None):
             raise CertificateException("Content missing name/label")
@@ -728,6 +731,8 @@ class Content(object):
         self.vendor = vendor
         self.url = url
         self.gpg = gpg
+        self.cdn = cdn
+        self.ca_cert = ca_cert
 
         if not content_type:
             raise CertificateException("Content does not have a type set.")
