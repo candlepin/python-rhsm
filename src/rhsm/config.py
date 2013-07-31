@@ -97,10 +97,14 @@ class RhsmConfigParser(SafeConfigParser):
         """
         try:
             return SafeConfigParser.get(self, section, prop)
-        except NoOptionError, er:
+        except Exception, er:
+            # If there is any problem reading from the config file,
+            # return the default
             try:
                 return DEFAULTS[section][prop.lower()]
             except KeyError:
+                # If the option does not exist in defaults,
+                # raise the original exception
                 raise er
 
     def set(self, section, name, value):
