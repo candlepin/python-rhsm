@@ -520,6 +520,9 @@ class EntitlementCertificate(ProductCertificate):
         return self._path_tree_object
 
     def is_expiring(self, on_date=None):
+        if not self.order:
+            # If there is no order, we cannot access warning_period
+            return False
         gmt = datetime.utcnow()
         if on_date:
             gmt = on_date
