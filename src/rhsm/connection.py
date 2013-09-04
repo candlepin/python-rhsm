@@ -144,6 +144,20 @@ class RemoteServerException(ConnectionException):
         return "Server returned %s" % self.code
 
 
+class InvalidCredentialsException(ConnectionException):
+
+    def __init__(self, code):
+        self.code = code
+
+    def __str__(self):
+        prefix = ""
+        if self.code == 401:
+            prefix = 'Unauthorized: '
+        elif self.code == 403:
+            prefix = 'Forbidden: '
+        return "%sInvalid credentials for request." % prefix
+
+
 class ExpiredIdentityCertException(ConnectionException):
 
     pass
@@ -457,6 +471,10 @@ class Restlib(object):
                 if str(response['status']) in ["404", "500", "502", "503", "504"]:
                     log.error('remote server status code: ' + str(response['status']))
                     raise RemoteServerException(response['status'])
+                elif str(response['status']) in ['401', '403']:
+                    log.error("invalid credentials caused an error. code: %s" %
+                              str(response['status']))
+                    raise InvalidCredentialsException(response['status'])
                 else:
                     raise NetworkException(response['status'])
 
