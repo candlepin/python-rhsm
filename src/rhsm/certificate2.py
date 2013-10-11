@@ -18,7 +18,7 @@ import logging
 import os
 import posixpath
 import re
-import simplejson as json
+import json
 import zlib
 
 log = logging.getLogger(__name__)
