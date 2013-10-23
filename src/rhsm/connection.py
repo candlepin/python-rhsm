@@ -20,7 +20,7 @@ import datetime
 import locale
 import logging
 import os
-import simplejson as json
+import json
 import socket
 import sys
 import time

@@ -11,7 +11,7 @@
 # http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt.
 #
 import logging
-import simplejson as json
+import json
 
 import rpm
 
