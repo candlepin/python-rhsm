@@ -16,6 +16,8 @@
 # in this software or its documentation.
 #
 
+import sys
+
 from iniparse import SafeConfigParser
 from iniparse.compat import NoOptionError, InterpolationMissingOptionError, \
         NoSectionError
@@ -81,7 +83,11 @@ class RhsmConfigParser(SafeConfigParser):
     def __init__(self, config_file=None, defaults=None):
         self.config_file = config_file
         SafeConfigParser.__init__(self)
-        self.read(self.config_file)
+        try:
+            self.read(self.config_file)
+        except Exception, ex:
+            print ex
+            sys.exit(1)
 
     def save(self, config_file=None):
         """writes config file to storage"""
