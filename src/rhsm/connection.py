@@ -514,52 +514,29 @@ class Restlib(object):
                     raise ExpiredIdentityCertException()
             raise
 
-        loop = gobject.MainLoop()
         # need to make a HttpConnection that can return a response object
         # that knows how to use the mainloop and/or GIO.
         #
         # We should be able to make the requests connections fileno an
         # unix.InputStream, and let mainloop take care of the rest
 
-        def callback(stream, result, user_data=None):
-            print
-            print
-            print "stream", stream, stream.has_pending()
-            print "result", result
-            print dir(result)
-            res_bool = result.get_op_res_gboolean()
-            print "result res", res_bool
-            res_size = result.get_op_res_gssize()
-            result.complete_in_idle()
-            print "result size", res_size
-            print "user_data", user_data
-            try:
-                print "run read_finish"
-                data = stream.read_finish(result)
-                print "done read_finish"
-                #stream.close()
-                print "data", data
-                print "user_data1", user_data
-                user_data = user_data + data
-                print "user_data2", user_data
-            finally:
-                loop.quit()
 
         # this will need to  return a gobject/mainloop/gio aware http response
         response = conn.getresponse()
         print "conn", conn, conn.sock
         print "response", response, response.fp
-        response.fp._sock.setblocking(0)
-        gis = gio.unix.InputStream(response.fp.fileno(), True)
-        print "gis", gis
+
+        #response.fp._sock.setblocking(0)
+        #gis = gio.unix.InputStream(response.fp.fileno(), True)
+        #print "gis", gis
 
 
-        buf = "___"
-        read_res = gis.read_async(4096, callback, user_data=buf)
-        print "read_res", read_res
+        #buf = "___"
+        #read_res = gis.read_async(4096, callback, user_data=buf)
+        #print "read_res", read_res
 
-        print "has_pending", gis.has_pending()
-        loop.run()
+        #print "has_pending", gis.has_pending()
+        #loop.run()
         #ctx = loop.get_context()
         #while gis.has_pending():
         #    ctx.iteration()
@@ -571,7 +548,7 @@ class Restlib(object):
         print "buf", buf
         result = {
             # .read can wrap a mainloop till we hit finish callback?
-            "content": buf,
+            "content": response.read(),
             "status": response.status,
         }
         response_log = 'Response: status=' + str(result['status'])
