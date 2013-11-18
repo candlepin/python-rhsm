@@ -17,11 +17,17 @@
 import base64
 import certificate
 import datetime
+
 import dateutil.parser
+
+import errno
+import httplib
+
 import locale
 import logging
 import os
 import socket
+import StringIO
 import sys
 import urllib
 
@@ -76,6 +82,25 @@ import gio
 import gio.unix
 import glib
 import gobject
+import gobject
+
+#FIXME:
+
+import debug_logger
+# on EL5, there is a really long socket timeout. The
+# best thing we can do is set a process wide default socket timeout.
+# Limit this to affected python versions only, just to minimize any
+# problems the default timeout might cause.
+if sys.version_info[0] == 2 and sys.version_info[0] <= 4:
+    socket.setdefaulttimeout(60)
+
+socket.setdefaulttimeout(5)
+
+# The module name changes between el5 and el6
+try:
+    import email.utils as eut
+except ImportError:
+    import email.Utils as eut
 
 class NullHandler(logging.Handler):
     def emit(self, record):
@@ -244,8 +269,405 @@ class RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
         return msg
 
 
+READ_SIZE = 1024 * 32
+
+
+class GObjectHTTPResponseReader(gobject.GObject):
+    def __init__(self, sock, read_amt=-1, *args, **kwargs):
+        log.debug("GObjectHTTPResponseReader init %s %s" % (args, kwargs))
+        gobject.GObject.__init__(self)
+        # probably move to a StringIO
+        self.content = ""
+        self.count = 0
+        self.read_amt = read_amt
+        self.read_buf = ""
+        self._finished = None
+        self.idle_src = None
+        #self.response = NonBlockingHTTPResponse(sock, *args, **kwargs)
+        self.result_buf = ""
+        self.http_status = None
+        self.http_version = None
+        self.http_reason = None
+
+    def timeout_callback(self, response):
+        self.count += 1
+        if response.isclosed():
+            print "request hit timeout %s times" % self.count
+            return False
+        print "timeout: %s" % self.count
+        return True
+
+    def headers_callback(self, source, condition, response):
+        log.debug("headers callbacl %s %s %s" % (source, condition, response))
+        buf = ""
+        try:
+            buf = source.read(256)
+            self.result_buf += buf
+        except socket.error, v:
+            if v.errno == errno.EAGAIN:
+                print "error"
+                return True
+            raise
+
+        if buf == "":
+            return False
+
+        # could read byte by byte looking for lines, well see
+        log.debug("looking for end of headers")
+        print self.result_buf
+        lines = self.result_buf.splitlines()
+        #print self.result_buf.replace("\n", "NEWLINE\n")
+        #index = self.result_buf.find("i\n\n")
+        #print "index", index
+        #if "" in lines:
+        #    header_buf = lines
+        index = None
+        try:
+            index = lines.index("")
+        except ValueError:
+            return True
+        if index:
+            self.header_buf = "\n".join(lines[:index])
+            self.content = "\n".join(lines[index:])
+            print self.header_buf
+            print "-------------"
+            print self.content
+            header_io = StringIO.StringIO(self.header_buf)
+            self.header_msg = httplib.HTTPMessage(header_io, 0)
+            print self.header_msg
+            self.length = self.header_msg.getheader('content-length')
+            self.headers_finished()
+            return False
+
+        return True
+
+        if index >= 0:
+            log.debug("found empty line in headers")
+            offset = index + 1
+            self.header_buf = StringIO()
+            self.header_buf.write(self.result_buf[:offset])
+            log.debug("header_buf\n %s" % self.header_buf.getvalue())
+
+            self.header_msg = httplib.HTTPMessage(self.header_buf, 0)
+            self.length = self.header_msg.getheader('content-length')
+            self.headers_finished()
+            return False
+
+        log.debug("reading more headers")
+        return True
+
+    def status_callback(self, source, condition, response):
+        log.debug("status_callback 1 %s %s %s" % (source, condition, response))
+        buf = ""
+        try:
+            buf = source.read(256)
+            self.result_buf += buf
+        except socket.error, v:
+            if v.errno == errno.EAGAIN:
+                print "error"
+                return True
+            raise
+
+        lines = self.result_buf.splitlines()
+        if lines:
+            # got the status line
+            self.status_line = lines[0]
+            [version, status, reason] = lines[0].split(None, 2)
+            self.http_version = version
+            self.http_status = status
+            self.http_reason = reason
+            log.debug("lines[0] %s" % lines[0])
+            log.debug("%s %s %s" % (version, status, reason))
+            #self.setup_read_callback(source)
+
+            self.status_finished()
+            #self.read_headers()
+            return False
+
+        log.debug("status_callback 2")
+        return True
+
+    def http_callback(self, source, condition, response, read_amt=READ_SIZE, *args):
+        #print ".",
+        #log.debug("http_callback args %s %s %s" % (source, condition, self.length))
+        #path, http_conn, http_response, str(args)
+        #print source, path
+
+        # it's faster if we just let it read till it blocks, but setting
+        # a read size offers more events.
+        #READ_SIZE=-1
+
+        print "gh1", condition
+        self.read_buf = ""
+        buf = ""
+        try:
+            buf = source.read(read_amt)
+            print "gh5"
+        except socket.error, v:
+            #log.exception(v)
+            if v.errno == errno.EAGAIN:
+                log.debug("socket.error: %s" % v)
+                return True
+            raise
+
+        print "gh10"
+
+        # callback? emit a signal?
+        if read_amt >= 0 and buf >= read_amt:
+            log.debug("read up to read_amt %s %s" % (read_amt, len(buf)))
+            self.content += buf
+            self.read_buf = buf
+            return False
+
+        #log.debug("len(buf) %s" % len(buf))
+        #print http_conn, http_response, len(buf), http_response.length
+        #global finished
+        if buf != '':
+    #        print "%s read on %s %s" % (len(buf), method, url)
+            self.content += buf
+    #        self.close()
+            return True
+
+        log.debug("----- end")
+        #response.close()
+        log.debug("empty buf")
+        log.debug("len:%s len(buf): %s len(content): %s" % (response.length, len(buf), len(self.content)))
+        self.finished()
+        response.close()
+        return False
+
+    def idle_callback(self, *args):
+        log.debug("\t idle callback: %s" % str(args))
+        if self._finished:
+            log.debug("idle finished")
+            return False
+       # time.sleep(.3)
+        return True
+
+    def error_callback(self, source, *args):
+        print "oops", source, str(args)
+        return False
+
+    def hup_callback(self, source, *args):
+        print "HUP HUP", source, str(args)
+        return False
+
+    def _finished_callback(self, *args):
+        log.debug("_finished_callback %s" % args)
+
+    def _status_finished_callback(self, *args):
+        log.debug("_status_finished_callback %s" % args)
+
+    def setup_read_callback(self, response):
+        # currently no hup, or error callbacks
+        # add status_callback to read headers? then http_callback when we get
+        # done with headers?
+        log.debug("setup_read_callback %s %s %s" % (response, self.http_callback, self.read_amt))
+        log.debug("%s" % dir(response))
+        self.http_src = gobject.io_add_watch(response.fp, gobject.IO_IN, self.http_callback, response, self.read_amt)
+
+    def remove_read_callback(self):
+        log.debug("removing response read callback")
+        gobject.source_remove(self.http_src)
+
+    def setup_status_callback(self, response, response_status_finished_callback=None):
+        log.debug("setup_status_callback %s %s %s" % (response, self.http_callback, self.read_amt))
+        log.debug("response_status_finished_callback %s" % response_status_finished_callback)
+
+        # callback from response object to start reading rest of response after
+        # status read
+        self.status_finished_callback = response_status_finished_callback
+
+        # when done, it will run self.status_finished_callback and remove it
+        # self as a src
+        #self.status_src = gobject.io_add_watch(response.fp._sock, gobject.IO_IN, self.status_callback, response)
+        self.status_src = gobject.io_add_watch(response.fp, gobject.IO_IN, self.status_callback, response)
+
+    def remove_status_callback(self):
+        log.debug("remove_status_callback")
+        gobject.source_remove(self.status_src)
+
+    def setup_headers_callback(self, response, response_headers_finished_callback=None):
+        log.debug("setup_headers_callback %s %s" % (response, response_headers_finished_callback))
+
+        self.headers_finished_callback = response_headers_finished_callback
+
+        self.headers_src = gobject.io_add_watch(response.fp, gobject.IO_IN, self.headers_callback, response)
+
+    def remove_headers_callback(self):
+        log.debug("remove_headers_callback")
+        gobject.source_remove(self.headers_src)
+
+    def setup_error_callback(self, response):
+        log.debug("setup_error_callback")
+        self.error_src = gobject.io_add_watch(response.fp, gobject.IO_ERR, self.error_callback)
+
+    def setup_hup_callback(self, response):
+        log.debug("setup_hup_callback")
+        self.hup_src = gobject.io_add_watch(response.fp, gobject.IO_HUP, self.hup_callback)
+
+    def setup_timeout_callback(self, response):
+        log.debug("setup timeout callback")
+        self.timeout_src = gobject.timeout_add(1000, self.timeout_callback, response)
+
+    def remove_timeout_callback(self):
+        log.debug("removing response timeout callback")
+        gobject.source_remove(self.timeout_src)
+
+    def setup_idle_callback(self):
+        log.debug("setup_idle_callback %s" % self)
+        self.idle_src = gobject.idle_add(self.idle_callback)
+
+    def remove_idle_callback(self):
+        log.debug("remove_idle_callback")
+        gobject.source_remove(self.idle_src)
+
+    # finish gsignal?
+    def setup_finished_callback(self, response_finished_callback=None):
+        log.debug("setup_finished_callback %s" % response_finished_callback)
+        self.finished_callback = response_finished_callback or self._finished_callback
+
+    def status_finished(self):
+        log.debug("status finished")
+        # FIXME: status finished signal?
+        self.status_finished_callback()
+        # FIXME: should be unneeded
+        self.remove_status_callback()
+
+    def headers_finished(self):
+        log.debug("headers finished")
+        self.headers_finished_callback()
+        self.remove_headers_callback()
+
+    def finished(self):
+        log.debug("finished")
+        self._finished = True
+        self.remove_timeout_callback()
+        self.remove_read_callback()
+        self.finished_callback()
+        if self.idle_src:
+            self.remove_idle_callback()
+
+gobject.type_register(GObjectHTTPResponseReader)
+
+
+class NonBlockingHTTPResponse(httplib.HTTPResponse):
+    def __init__(self, sock, *args, **kwargs):
+        httplib.HTTPResponse.__init__(self, sock, *args, **kwargs)
+        log.debug("NonBlocking self.fp %s" % (self.fp))
+        log.debug("NonBlocking sock %s" % sock)
+        self.gresponse = GObjectHTTPResponseReader(sock, *args, **kwargs)
+        self.gresponse.read_amt = -1
+
+        # not _UNKNOWN
+        self.will_close = 1
+
+        # Header wrapper
+        self.msg = None
+        self.length = None
+
+        self.loop_end = None
+        # read up to amt from the response
+        # note if called with amt, the callback is removed, and needs to
+        # be setup again
+        #self.gresponse.read_amt = amt
+        #self.gresponse.setup_idle_callback()
+        self.gresponse.setup_error_callback(self)
+        self.gresponse.setup_hup_callback(self)
+        self.gresponse.setup_timeout_callback(self)
+        # better as an emitted signal?
+        self.gresponse.setup_finished_callback(self.finish_read)
+        #self.gresponse.setup_read_callback(self)
+        self.gresponse.setup_status_callback(self, self.finish_status)
+        #self.gresponse.finished_callback = self.finish_read
+        #self.gresponse.idle_callback = self.idle_callback
+        # loop iteration here till finished callback?
+
+    def finish_status(self):
+        log.debug("finish_status")
+        #self.gresponse.setup_read_callback(self)
+        self.status = self.gresponse.http_status
+        self.version = self.gresponse.http_version
+        self.reason = self.gresponse.http_reason
+
+        self.gresponse.setup_headers_callback(self, self.finish_headers)
+
+    def finish_headers(self):
+        log.debug("finish_headers")
+
+        log.debug("about to setup read callback")
+        self.msg = self.gresponse.header_msg
+        self.length = self.gresponse.length
+        self.gresponse.setup_read_callback(self)
+
+    def finish_read(self):
+        # return all the read content
+        log.debug("finished_callback")
+        self.content = self.gresponse.content
+        #self.finished_callback()
+
+        print "self.content"
+        print self.content
+        # pop out of main event loop, should use signals
+        if self.loop_end:
+            self.loop_end()
+        print "I could quite the mainloop here"
+
+    def begin(self):
+        log.debug("%s begin" % self.__class__.__name__)
+        # HTTPResponse.begin doesnt really deal well with non
+        # blocking sockets (some docs point finger at it's use of readline)
+        # so, get the response header, with the content length (ie, begin)
+        # then set the socket to non blocking
+        #httplib.HTTPResponse.begin(self)
+        self.set_blocking(False)
+        #self._read_status()
+
+    def close(self):
+        log.debug("close %s" % self)
+        httplib.HTTPResponse.close(self)
+
+    def set_blocking(self, blocking=True):
+        # HTTPResponse uses a file object like interface to it's socket
+        #  (socket._fileobject), so this sets the response objects
+        # file object's socket to be non blocking.
+        # Almost surely a better way to do this, and it will also depend
+        # on the httplib implemtation (ie, httpslib stuff)
+        self.fp._sock.setblocking(blocking)
+
+
+class GobjectHTTPConnection(httpslib.HTTPSConnection):
+
+    response_class = NonBlockingHTTPResponse
+
+    def __init__(self, finished_callback, *args, **kwargs):
+        log.debug("GobjectHTTPCOnnection %s %s" % (args, kwargs))
+        httpslib.HTTPSConnection.__init__(self, *args, **kwargs)
+        #GobjectHTTPConnection.__init__(*args, **kwargs)
+        self.debuglevel = 5
+        self.content = ""
+        self.count = 0
+        self.timeout = 5
+        self.finished_callback = finished_callback
+
+    def close(self):
+        log.debug("Connection close")
+        httplib.HTTPConnection.close(self)
+        self.finished_callback()
+
+    #def read_finished_callback(self):
+
+    #    log.debug("removing callbacks")
+    #    log.debug("self.count: %s" % self.count)
+    #    gobject.source_remove(self.idle_src)
+    #    #self.content = self.http_response.content
+    #    log.debug("finished  with len(content): %s" % len(self.http_response.content))
+
+
 # FIXME: this is terrible, we need to refactor
 # Restlib to be Restlib based on a https client class
+#
+# Or... ditch this entirely, and use yum's tools to get this?
 class ContentConnection(object):
     def __init__(self, host, ssl_port=None,
                  username=None, password=None,
@@ -369,6 +791,9 @@ class Restlib(object):
     """
      A wrapper around httplib to make rest calls easier
     """
+
+    main_loop_factory = gobject.MainLoop
+
     def __init__(self, host, ssl_port, apihandler,
             username=None, password=None,
             proxy_hostname=None, proxy_port=None,
@@ -405,6 +830,8 @@ class Restlib(object):
             encoded = base64.b64encode(':'.join((username, password)))
             basic = 'Basic %s' % encoded
             self.headers['Authorization'] = basic
+
+        self.main_loop = None
 
     def _decode_list(self, data):
         rv = []
@@ -448,6 +875,23 @@ class Restlib(object):
         if loaded_ca_certs:
             log.debug("Loaded CA certificates from %s: %s" % (self.ca_dir, ', '.join(loaded_ca_certs)))
 
+    def start_main_loop(self):
+        if self.main_loop:
+            return self.main_loop
+
+        if self.main_loop_factory:
+            self.main_loop = self.main_loop_factory()
+            return self.main_loop
+
+        raise Exception("No main loop provided")
+
+    def end_main_loop(self):
+        print "end main loop"
+        if self.main_loop:
+            self.main_loop.quit()
+        else:
+            raise Exception("No main loop provided to end")
+
     # FIXME: can method be emtpty?
     def _request(self, request_type, method, info=None):
         handler = self.apihandler + method
@@ -466,6 +910,9 @@ class Restlib(object):
         # Disable SSLv2 and SSLv3 support to avoid poodles.
         context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
+
+        self.start_main_loop()
+        # NOTE: this should probably be part of connection class
         if self.insecure:  # allow clients to work insecure mode if required..
             context.post_connection_check = NoOpChecker()
         else:
@@ -478,6 +925,7 @@ class Restlib(object):
         if self.cert_file and os.path.exists(self.cert_file):
             context.load_cert(self.cert_file, keyfile=self.key_file)
 
+        # need a connection factory
         if self.proxy_hostname and self.proxy_port:
             log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
             conn = RhsmProxyHTTPSConnection(self.proxy_hostname, self.proxy_port,
@@ -487,8 +935,8 @@ class Restlib(object):
             # this connection class wants the full url
             handler = "https://%s:%s%s" % (self.host, self.ssl_port, handler)
         else:
-            conn = httpslib.HTTPSConnection(self.host, self.ssl_port, ssl_context=context)
-
+            conn = GobjectHTTPConnection(self.end_main_loop, self.host, self.ssl_port, ssl_context=context)
+#            conn = httpslib.HTTPSConnection(self.host, self.ssl_port, ssl_context=context)
 
         if info is not None:
             body = json.dumps(info, default=json.encode)
@@ -507,6 +955,7 @@ class Restlib(object):
 
         try:
             conn.request(request_type, handler, body=body, headers=headers)
+            #conn.start_get(request_type, handler, body=body, headers=headers)
         except SSLError:
             if self.cert_file:
                 id_cert = certificate.create_from_file(self.cert_file)
@@ -520,35 +969,41 @@ class Restlib(object):
         # We should be able to make the requests connections fileno an
         # unix.InputStream, and let mainloop take care of the rest
 
-
         # this will need to  return a gobject/mainloop/gio aware http response
         response = conn.getresponse()
         print "conn", conn, conn.sock
+        #conn.start_get()
         print "response", response, response.fp
 
+        # hook a way to exit the loop
+        response.loop_end = self.end_main_loop
         #response.fp._sock.setblocking(0)
         #gis = gio.unix.InputStream(response.fp.fileno(), True)
         #print "gis", gis
-
 
         #buf = "___"
         #read_res = gis.read_async(4096, callback, user_data=buf)
         #print "read_res", read_res
 
+        # should have io channels being watched by here
         #print "has_pending", gis.has_pending()
-        #loop.run()
-        #ctx = loop.get_context()
+        #conn.start_get()
+        #response.sread()
+
+        # FIXME: could provide some event loop abstraction I suppose
+        self.main_loop.run()
+
+        #ctx = self.main_loop.get_context()
         #while gis.has_pending():
         #    ctx.iteration()
         #while ctx.pending():
         #    ctx.iteration()
 
+        log.debug(response.status)
 
-
-        print "buf", buf
         result = {
             # .read can wrap a mainloop till we hit finish callback?
-            "content": response.read(),
+            "content": response.content,
             "status": response.status,
         }
         response_log = 'Response: status=' + str(result['status'])
