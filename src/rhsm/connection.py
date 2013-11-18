@@ -309,8 +309,9 @@ class GObjectHTTPResponseReader(gobject.GObject):
                 return True
             raise
 
-        if buf == "":
-            return False
+        #if buf == "":
+        #    print "huh?"
+        #    return False
 
         # could read byte by byte looking for lines, well see
         log.debug("looking for end of headers")
@@ -380,6 +381,7 @@ class GObjectHTTPResponseReader(gobject.GObject):
             log.debug("%s %s %s" % (version, status, reason))
             #self.setup_read_callback(source)
 
+            print self.result_buf
             self.status_finished()
             #self.read_headers()
             return False
@@ -590,6 +592,12 @@ class NonBlockingHTTPResponse(httplib.HTTPResponse):
         self.version = self.gresponse.http_version
         self.reason = self.gresponse.http_reason
 
+        print "self.status", self.status, httplib.NO_CONTENT
+        # figure out cases for not reading body, 204, HEAD, etc. see httplib
+        #if self.status == str(httplib.NO_CONTENT):
+        #    self.finish_read()
+        #    return
+
         self.gresponse.setup_headers_callback(self, self.finish_headers)
 
     def finish_headers(self):
@@ -598,6 +606,7 @@ class NonBlockingHTTPResponse(httplib.HTTPResponse):
         log.debug("about to setup read callback")
         self.msg = self.gresponse.header_msg
         self.length = self.gresponse.length
+
         self.gresponse.setup_read_callback(self)
 
     def finish_read(self):
