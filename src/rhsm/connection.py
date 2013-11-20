@@ -269,10 +269,17 @@ class RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
         return msg
 
 
-READ_SIZE = 1024 * 32
+#READ_SIZE = 1024 * 32
+READ_SIZE = -1
 
 
 class GObjectHTTPResponseReader(gobject.GObject):
+    __gsignals__ = {
+            "read-finished": (gobject.SIGNAL_RUN_LAST,
+                              gobject.TYPE_NONE,
+                              ())
+            }
+
     def __init__(self, sock, read_amt=-1, *args, **kwargs):
         log.debug("GObjectHTTPResponseReader init %s %s" % (args, kwargs))
         gobject.GObject.__init__(self)
@@ -289,6 +296,16 @@ class GObjectHTTPResponseReader(gobject.GObject):
         self.http_version = None
         self.http_reason = None
 
+        self._chunked = None
+        self._chunk_left = None
+        self._chunk = ""
+
+        self.connect("read-finished", self.on_read_finished)
+
+    # TODO: replace setup_finish* methods with signal handlers
+    def on_read_finished(self, gobject):
+        print "CCCCCCC on_read_finished %s" % gobject
+
     def timeout_callback(self, response):
         self.count += 1
         if response.isclosed():
@@ -302,6 +319,8 @@ class GObjectHTTPResponseReader(gobject.GObject):
         buf = ""
         try:
             buf = source.read(256)
+            print "BUF"
+            print buf
             self.result_buf += buf
         except socket.error, v:
             if v.errno == errno.EAGAIN:
@@ -315,7 +334,7 @@ class GObjectHTTPResponseReader(gobject.GObject):
 
         # could read byte by byte looking for lines, well see
         log.debug("looking for end of headers")
-        print self.result_buf
+        #print self.result_buf
         lines = self.result_buf.splitlines()
         #print self.result_buf.replace("\n", "NEWLINE\n")
         #index = self.result_buf.find("i\n\n")
@@ -329,39 +348,54 @@ class GObjectHTTPResponseReader(gobject.GObject):
             return True
         if index:
             self.header_buf = "\n".join(lines[:index])
+            print "self.header_buf"
+            #print self.header_buf
             self.content = "\n".join(lines[index:])
-            print self.header_buf
-            print "-------------"
-            print self.content
+            #print self.header_buf
+            #print "-------------"
+            #print self.content
+            #print "-------------"
             header_io = StringIO.StringIO(self.header_buf)
             self.header_msg = httplib.HTTPMessage(header_io, 0)
-            print self.header_msg
+            #print self.header_msg
             self.length = self.header_msg.getheader('content-length')
-            self.headers_finished()
-            return False
+            log.debug("content-length %s" % self.length)
+            tr_enc = self.header_msg.getheader("transfer-encoding")
+            log.debug("transfer %s" % tr_enc)
+            if tr_enc and tr_enc.lower() == "chunked":
+                log.debug("CHUNKED")
+                self._chunked = True
 
-        return True
-
-        if index >= 0:
-            log.debug("found empty line in headers")
-            offset = index + 1
-            self.header_buf = StringIO()
-            self.header_buf.write(self.result_buf[:offset])
-            log.debug("header_buf\n %s" % self.header_buf.getvalue())
-
-            self.header_msg = httplib.HTTPMessage(self.header_buf, 0)
-            self.length = self.header_msg.getheader('content-length')
+            #print "header_io", header_io.read()
+            #print self.header_msg.headers
             self.headers_finished()
             return False
 
         log.debug("reading more headers")
         return True
 
+        #if index >= 0:
+            #log.debug("found empty line in headers")
+            #offset = index + 1
+            #self.header_buf = StringIO()
+            #self.header_buf.write(self.result_buf[:offset])
+            #log.debug("header_buf\n %s" % self.header_buf.getvalue())
+
+            #self.header_msg = httplib.HTTPMessage(self.header_buf, 0)
+            #self.length = self.header_msg.getheader('content-length')
+            #self.headers_finished()
+            #return False
+
+        #log.debug("reading more headers")
+        #return True
+
     def status_callback(self, source, condition, response):
         log.debug("status_callback 1 %s %s %s" % (source, condition, response))
         buf = ""
         try:
             buf = source.read(256)
+            log.debug("STATUS BUF")
+            log.debug(buf)
             self.result_buf += buf
         except socket.error, v:
             if v.errno == errno.EAGAIN:
@@ -373,6 +407,10 @@ class GObjectHTTPResponseReader(gobject.GObject):
         if lines:
             # got the status line
             self.status_line = lines[0]
+
+            # dont include status line in headers
+            self.result_buf = '\n'.join(lines[1:])
+
             [version, status, reason] = lines[0].split(None, 2)
             self.http_version = version
             self.http_status = status
@@ -381,7 +419,7 @@ class GObjectHTTPResponseReader(gobject.GObject):
             log.debug("%s %s %s" % (version, status, reason))
             #self.setup_read_callback(source)
 
-            print self.result_buf
+            #print self.result_buf
             self.status_finished()
             #self.read_headers()
             return False
@@ -400,11 +438,14 @@ class GObjectHTTPResponseReader(gobject.GObject):
         #READ_SIZE=-1
 
         print "gh1", condition
-        self.read_buf = ""
+        log.debug("http_callback %s %s %s %s %s" % (source, condition, response, read_amt, args))
+        #self.read_buf = ""
+
         buf = ""
         try:
             buf = source.read(read_amt)
-            print "gh5"
+            log.debug("BODY BUF")
+            log.debug(buf)
         except socket.error, v:
             #log.exception(v)
             if v.errno == errno.EAGAIN:
@@ -415,10 +456,10 @@ class GObjectHTTPResponseReader(gobject.GObject):
         print "gh10"
 
         # callback? emit a signal?
-        if read_amt >= 0 and buf >= read_amt:
+        if read_amt >= 0 and len(buf) >= read_amt:
             log.debug("read up to read_amt %s %s" % (read_amt, len(buf)))
             self.content += buf
-            self.read_buf = buf
+            #self.read_buf = buf
             return False
 
         #log.debug("len(buf) %s" % len(buf))
@@ -426,6 +467,8 @@ class GObjectHTTPResponseReader(gobject.GObject):
         #global finished
         if buf != '':
     #        print "%s read on %s %s" % (len(buf), method, url)
+            if self._chunked:
+                self._chunk += buf
             self.content += buf
     #        self.close()
             return True
@@ -433,7 +476,9 @@ class GObjectHTTPResponseReader(gobject.GObject):
         log.debug("----- end")
         #response.close()
         log.debug("empty buf")
-        log.debug("len:%s len(buf): %s len(content): %s" % (response.length, len(buf), len(self.content)))
+        log.debug("len:%s len(buf): %s len(content): %s len(chunk): %s" % (response.length,
+                                                                       len(buf), len(self.content),
+                                                                       len(self._chunk)))
         self.finished()
         response.close()
         return False
@@ -465,7 +510,6 @@ class GObjectHTTPResponseReader(gobject.GObject):
         # add status_callback to read headers? then http_callback when we get
         # done with headers?
         log.debug("setup_read_callback %s %s %s" % (response, self.http_callback, self.read_amt))
-        log.debug("%s" % dir(response))
         self.http_src = gobject.io_add_watch(response.fp, gobject.IO_IN, self.http_callback, response, self.read_amt)
 
     def remove_read_callback(self):
@@ -546,6 +590,7 @@ class GObjectHTTPResponseReader(gobject.GObject):
         self._finished = True
         self.remove_timeout_callback()
         self.remove_read_callback()
+        self.emit("read-finished")
         self.finished_callback()
         if self.idle_src:
             self.remove_idle_callback()
@@ -615,21 +660,23 @@ class NonBlockingHTTPResponse(httplib.HTTPResponse):
         self.content = self.gresponse.content
         #self.finished_callback()
 
-        print "self.content"
-        print self.content
+        #print "self.content"
+        #print self.content
         # pop out of main event loop, should use signals
         if self.loop_end:
             self.loop_end()
-        print "I could quite the mainloop here"
+        print "I could quit the mainloop here"
 
     def begin(self):
-        log.debug("%s begin" % self.__class__.__name__)
+    #    log.debug("%s begin" % self.__class__.__name__)
         # HTTPResponse.begin doesnt really deal well with non
         # blocking sockets (some docs point finger at it's use of readline)
         # so, get the response header, with the content length (ie, begin)
         # then set the socket to non blocking
         #httplib.HTTPResponse.begin(self)
+
         self.set_blocking(False)
+
         #self._read_status()
 
     def close(self):
@@ -652,6 +699,7 @@ class GobjectHTTPConnection(httpslib.HTTPSConnection):
     def __init__(self, finished_callback, *args, **kwargs):
         log.debug("GobjectHTTPCOnnection %s %s" % (args, kwargs))
         httpslib.HTTPSConnection.__init__(self, *args, **kwargs)
+
         #GobjectHTTPConnection.__init__(*args, **kwargs)
         self.debuglevel = 5
         self.content = ""
@@ -1034,6 +1082,8 @@ class Restlib(object):
         if not len(result['content']):
             return None
 
+        print "content",
+        print result['content']
         return json.loads(result['content'], object_hook=self._decode_dict)
 
     def validateResponse(self, response, request_type=None, handler=None):

@@ -174,6 +174,7 @@ class BindRequestTests(unittest.TestCase):
                 self.assertEquals(None, kwargs['body'])
 
 
+
 @attr('functional')
 class ContentConnectionTests(unittest.TestCase):
 
