@@ -61,6 +61,22 @@ class ConnectionTests(unittest.TestCase):
     def test_clean_up_prefix(self):
         self.assertTrue(self.cp.handler == "/Test")
 
+    def test_update_consumer_guest_ids_old_cp(self):
+        self.cp.conn = Mock()
+        self.cp.conn.request_get = Mock(return_value=[])
+        result = self.cp._sanitize_guests([{'guestId': 'a', 'active': True},
+                {'guestId': 'b', 'active': True}])
+        self.assertEquals(['a', 'b'], result)
+
+    def test_update_consumer_guest_ids_new_cp(self):
+        self.cp.conn = Mock()
+        self.cp.conn.request_get = Mock(return_value=[{'rel': 'guest_limit',
+            'href': '/href/guestid'}])
+        guest_objects = [{'guestId': 'a', 'active': True},
+                {'guestId': 'b', 'active': True}]
+        result = self.cp._sanitize_guests(guest_objects)
+        self.assertEquals(guest_objects, result)
+
 
 class RestlibValidateResponseTests(unittest.TestCase):
     def setUp(self):
