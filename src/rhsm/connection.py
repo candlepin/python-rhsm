@@ -20,6 +20,7 @@ import datetime
 import locale
 import logging
 import os
+import re
 import socket
 import sys
 import time
@@ -28,6 +29,7 @@ import urllib
 from M2Crypto import SSL, httpslib
 from M2Crypto.SSL import SSLError
 from urllib import urlencode
+from urlparse import urlparse
 
 from config import initConfig
 from version import Versions
@@ -85,6 +87,169 @@ def drift_check(utc_time_string, hours=6):
             log.error(e)
 
         return drift
+
+
+def has_bad_scheme(url):
+    # Don't allow urls to start with :/ http/ https/ non http/httpsm or http(s) with single /
+    match_bad = '(https?[:/])|(:/)|(\S+://)'
+    match_good = 'https?://'
+    # Testing good first allows us to exclude some regex for bad
+    if re.match(match_good, url):
+        return False
+    if re.match(match_bad, url):
+        return True
+    return False
+
+
+def has_good_scheme(url):
+    match = re.match("https?://(\S+)?", url)
+    if not match:
+        return False
+    # a good scheme alone is not really a good scheme
+    if not match.group(1):
+        return False
+    return True
+
+
+def parse_url(local_server_entry,
+              default_hostname=None,
+              default_port=None,
+              default_prefix=None,
+              default_username=None,
+              default_password=None):
+    """
+    Parse hostname, port, and webapp prefix from the string a user entered.
+
+    Expected format: hostname:port/prefix
+
+    Port and prefix are optional.
+
+    Returns:
+        a tuple of (hostname, port, path)
+    """
+    # Return none if we don't have a url to parse
+
+    if local_server_entry == "" or local_server_entry is None:
+        return None
+
+    # good_url in this case meaning a schema we support, and
+    # _something_ else. This is to make urlparse happy
+    good_url = None
+
+    # handle any known or troublesome or bogus typo's, etc
+    if has_bad_scheme(local_server_entry):
+        raise UrlParseErrorScheme(local_server_entry,
+            msg=_("Server URL has an invalid scheme. http:// and https:// are supported"))
+
+    # we want to see if we have a good scheme, and
+    # at least _something_ else
+    if has_good_scheme(local_server_entry):
+        good_url = local_server_entry
+
+    # not having a good scheme could just mean we don't have a scheme,
+    # so let's include one so urlparse doesn't freak
+    if not good_url:
+        good_url = "https://%s" % local_server_entry
+
+    #FIXME: need a try except here? docs
+    # don't seem to indicate any expected exceptions
+    result = urlparse(good_url)
+    username = default_username
+    password = default_password
+    #netloc = result[1].split(":")
+
+    # to support username and password, let's split on @
+    # since the format will be username:password@hostname:port
+    foo = result[1].split("@")
+
+    # handle username/password portion, then deal with host:port
+    # just in case someone passed in @hostname without
+    # a username,  we default to the default_username
+    if len(foo) > 1:
+        creds = foo[0].split(":")
+        netloc = foo[1].split(":")
+
+        if len(creds) > 1:
+            password = creds[1]
+        if creds[0] is not None and len(creds[0]) > 0:
+            username = creds[0]
+    else:
+        netloc = foo[0].split(":")
+
+    # in some cases, if we try the attr accessors, we'll
+    # get a ValueError deep down in urlparse, particular if
+    # port ends up being None
+    #
+    # So maybe check result.port/path/hostname for None, and
+    # throw an exception in those cases.
+    # adding the schem seems to avoid this though
+    port = default_port
+    if len(netloc) > 1:
+        if netloc[1] != "":
+            port = str(netloc[1])
+        else:
+            raise UrlParseErrorPort(local_server_entry,
+                                      msg=_("Server URL port could not be parsed"))
+
+    # path can be None?
+    prefix = default_prefix
+    if result[2] is not None:
+        if result[2] != '':
+            prefix = result[2]
+
+    hostname = default_hostname
+    if netloc[0] is not None:
+        if netloc[0] != "":
+            hostname = netloc[0]
+
+    try:
+        int(port)
+    except ValueError:
+        raise UrlParseErrorPort(local_server_entry,
+                                      msg=_("Server URL port should be numeric"))
+
+    return (username, password, hostname, port, prefix)
+
+
+def get_env_proxy_info():
+    the_proxy = {'proxy_username': '',
+                 'proxy_hostname': '',
+                 'proxy_port': '',
+                 'proxy_password': ''}
+
+    # get the proxy information from the environment variable
+    # if available
+    # look in the following order:
+    #   HTTPS_PROXY
+    #   https_proxy
+    #   HTTP_PROXY
+    #   http_proxy
+    # look through the list for the first one to match
+    info = ()
+    env_vars = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+    for ev in env_vars:
+        proxy_info = os.getenv(ev)
+        if proxy_info is not None:
+            info = parse_url(proxy_info, default_port=3128)
+            break
+
+    if len(info) > 1:
+        the_proxy['proxy_username'] = info[0]
+        the_proxy['proxy_password'] = info[1]
+        the_proxy['proxy_hostname'] = info[2]
+        if info[3] is None or info[3] == "":
+            the_proxy['proxy_port'] = None
+        else:
+            the_proxy['proxy_port'] = int(info[3])
+    return the_proxy
+
+
+class UrlParseErrorScheme(Exception):
+    pass
+
+
+class UrlParseErrorPort(Exception):
+    pass
 
 
 class ConnectionException(Exception):
@@ -596,10 +761,14 @@ class UEPConnection:
         # BZ848836
         self.handler = self.handler.rstrip("/")
 
-        self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname')
-        self.proxy_port = proxy_port or config.get('server', 'proxy_port')
-        self.proxy_user = proxy_user or config.get('server', 'proxy_user')
-        self.proxy_password = proxy_password or config.get('server', 'proxy_password')
+        # get the proxy information from the environment variable
+        # if available
+        info = get_env_proxy_info()
+
+        self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
+        self.proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
+        self.proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
+        self.proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
 
         self.cert_file = cert_file
         self.key_file = key_file
