@@ -766,7 +766,7 @@ class UEPConnection:
         if installed_products is not None:
             params['installedProducts'] = installed_products
         if guest_uuids is not None:
-            params['guestIds'] = guest_uuids
+            params['guestIds'] = self._sanitize_guests(guest_uuids)
         if facts is not None:
             params['facts'] = facts
         if release is not None:
@@ -783,6 +783,19 @@ class UEPConnection:
         method = "/consumers/%s" % self.sanitize(uuid)
         ret = self.conn.request_put(method, params)
         return ret
+
+    def _sanitize_guests(self, guest_uuids):
+        """
+        Old servers don't support overloading some objects.  We
+        need to make sure we can upload additional guestId data
+        before we send a json object, otherwise we send a list
+        the old way.
+        """
+        if len(guest_uuids) and \
+                not isinstance(guest_uuids[0], basestring) and \
+                not self.supports_resource("guest_limit"):
+            return [guest['guestId'] for guest in guest_uuids]
+        return guest_uuids
 
     def updatePackageProfile(self, consumer_uuid, pkg_dicts):
         """
