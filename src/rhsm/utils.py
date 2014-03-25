@@ -221,3 +221,24 @@ def get_env_proxy_info():
         else:
             the_proxy['proxy_port'] = int(info[3])
     return the_proxy
+
+
+class Resource(object):
+
+    def __init__(self, rel=None, href=None, version=None):
+        self.href = href
+        self.rel = rel
+        # Resource version is not reported on old candlepins
+        self.version = version or 0
+
+    def get_href(self):
+        return self.href
+
+    def get_rel(self):
+        return self.rel
+
+    def get_version(self):
+        return self.version
+
+    def supports_version(self, required_version):
+        return self.version >= required_version
