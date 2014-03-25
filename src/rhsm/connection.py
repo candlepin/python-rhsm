@@ -686,11 +686,11 @@ class UEPConnection:
         self.resources = {}
         resources_list = self.conn.request_get("/")
         for r in resources_list:
-            self.resources[r['rel']] = r['href']
+            self.resources[r['rel']] = r
         log.debug("Server supports the following resources:")
         log.debug(self.resources)
 
-    def supports_resource(self, resource_name):
+    def supports_resource(self, resource_name, version=None):
         """
         Check if the server we're connecting too supports a particular
         resource. For our use cases this is generally the plural form
@@ -699,7 +699,13 @@ class UEPConnection:
         if self.resources is None:
             self._load_supported_resources()
 
-        return resource_name in self.resources
+        if resource_name in self.resources:
+            required_version = version or 0
+            # Default version zero if not present
+            server_version = self.resources[resource_name].get('version', 0)
+            return server_version >= required_version
+
+        return False
 
     def shutDown(self):
         self.conn.close()
