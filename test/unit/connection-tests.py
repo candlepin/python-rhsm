@@ -27,6 +27,10 @@ from datetime import date
 from time import strftime, gmtime
 from rhsm import ourjson as json
 
+ROOT_RESOURCE_DATA = [{'href': '/test', 'rel':'test'}, \
+        {'href': '/resource', 'rel':'resource', 'version': 1}, \
+        {'href': '/other', 'rel':'other', 'version': 2}]
+
 class ConnectionTests(unittest.TestCase):
 
     def setUp(self):
@@ -128,6 +132,55 @@ class ConnectionTests(unittest.TestCase):
         # doesn't support additional data
         expected_guestIds = [guestId['guestId'] for guestId in guestIds]
         self.assertEquals(expected_guestIds, resultGuestIds)
+
+    def test_supports_resource_not_found(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # Test original functionality.  there is no foo resource
+        result = self.cp.supports_resource('foo')
+        self.assertFalse(result)
+
+    def test_supports_resource(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # Test original functionality, test exists with no version
+        result = self.cp.supports_resource('test')
+        self.assertTrue(result)
+
+    def test_supports_new_resource_old_server(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # This resource has no version defined
+        result = self.cp.supports_resource('test', 1)
+        self.assertFalse(result)
+
+    def test_supports_new_resource_new_server(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # This resource has version 1 defined
+        result = self.cp.supports_resource('resource', 1)
+        self.assertTrue(result)
+
+    def test_old_client_supports_new_server(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # This resource has version 2 defined
+        result = self.cp.supports_resource('other')
+        self.assertTrue(result)
+
+    def test_supports_new_server_less_new_client(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # This resource has version 2 defined
+        result = self.cp.supports_resource('other', 1)
+        self.assertTrue(result)
+
+    def test_supports_less_new_server_new_client(self):
+        self.cp.resources = None
+        self.cp.conn.request_get = Mock(return_value=ROOT_RESOURCE_DATA)
+        # This resource has version 2 defined
+        result = self.cp.supports_resource('other', 5)
+        self.assertFalse(result)
 
 
 class RestlibValidateResponseTests(unittest.TestCase):

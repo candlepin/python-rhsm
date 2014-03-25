@@ -34,6 +34,7 @@ from version import Versions
 
 from rhsm import ourjson as json
 from rhsm.utils import get_env_proxy_info
+from rhsm.utils import Resource
 
 # on EL5, there is a really long socket timeout. The
 # best thing we can do is set a process wide default socket timeout.
@@ -686,11 +687,11 @@ class UEPConnection:
         self.resources = {}
         resources_list = self.conn.request_get("/")
         for r in resources_list:
-            self.resources[r['rel']] = r['href']
+            self.resources[r['rel']] = Resource(**r)
         log.debug("Server supports the following resources:")
         log.debug(self.resources)
 
-    def supports_resource(self, resource_name):
+    def supports_resource(self, resource_name, version=None):
         """
         Check if the server we're connecting too supports a particular
         resource. For our use cases this is generally the plural form
@@ -699,7 +700,12 @@ class UEPConnection:
         if self.resources is None:
             self._load_supported_resources()
 
-        return resource_name in self.resources
+        if resource_name in self.resources:
+            resource = self.resources[resource_name]
+            # Default version zero if not present
+            return resource.supports_version(version or 0)
+
+        return False
 
     def shutDown(self):
         self.conn.close()
