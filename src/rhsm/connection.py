@@ -158,7 +158,7 @@ class AuthenticationException(RemoteServerException):
     prefix = "Authentication error"
 
     def __str__(self):
-        buf = super(AuthenticationException, self).__str__()
+        buf = RemoteServerException.__str__(self)
         buf += "\n"
         buf += "%s: Invalid credentials for request." % self.prefix
         return buf

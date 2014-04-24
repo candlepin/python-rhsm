@@ -324,58 +324,72 @@ class TestProxyInfo(unittest.TestCase):
         return proxy_env
 
     def test_https_proxy_info(self):
-        with patch.dict('os.environ', self._gen_env({'https_proxy': 'https://u:p@host:1111'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals("u", proxy_info["proxy_username"])
-            self.assertEquals("p", proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(int("1111"), proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'https_proxy': 'https://u:p@host:1111'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals("u", proxy_info["proxy_username"])
+        self.assertEquals("p", proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(int("1111"), proxy_info["proxy_port"])
+        pa.stop()
 
     def test_http_proxy_info(self):
-        with patch.dict('os.environ', self._gen_env({'http_proxy': 'http://u:p@host:2222'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals("u", proxy_info["proxy_username"])
-            self.assertEquals("p", proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(int("2222"), proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'http_proxy': 'http://u:p@host:2222'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals("u", proxy_info["proxy_username"])
+        self.assertEquals("p", proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(int("2222"), proxy_info["proxy_port"])
+        pa.stop()
 
     def test_http_proxy_info_allcaps(self):
-        with patch.dict('os.environ', self._gen_env({'HTTP_PROXY': 'http://u:p@host:3333'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals("u", proxy_info["proxy_username"])
-            self.assertEquals("p", proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(int("3333"), proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'HTTP_PROXY': 'http://u:p@host:3333'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals("u", proxy_info["proxy_username"])
+        self.assertEquals("p", proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(int("3333"), proxy_info["proxy_port"])
+        pa.stop()
 
     def test_https_proxy_info_allcaps(self):
-        with patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'https://u:p@host:4444'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals("u", proxy_info["proxy_username"])
-            self.assertEquals("p", proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(int("4444"), proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'https://u:p@host:4444'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals("u", proxy_info["proxy_username"])
+        self.assertEquals("p", proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(int("4444"), proxy_info["proxy_port"])
+        pa.stop()
 
     def test_order(self):
         # should follow the order: HTTPS, https, HTTP, http
-        with patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'http://u:p@host:1111', 'http_proxy': 'http://notme:orme@host:2222'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals("u", proxy_info["proxy_username"])
-            self.assertEquals("p", proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(int("1111"), proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'http://u:p@host:1111', 'http_proxy': 'http://notme:orme@host:2222'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals("u", proxy_info["proxy_username"])
+        self.assertEquals("p", proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(int("1111"), proxy_info["proxy_port"])
+        pa.stop()
 
     def test_no_port(self):
-        with patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'http://u:p@host'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals("u", proxy_info["proxy_username"])
-            self.assertEquals("p", proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(3128, proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'http://u:p@host'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals("u", proxy_info["proxy_username"])
+        self.assertEquals("p", proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(3128, proxy_info["proxy_port"])
+        pa.stop()
 
     def test_no_user_or_password(self):
-        with patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'http://host:1111'})):
-            proxy_info = get_env_proxy_info()
-            self.assertEquals(None, proxy_info["proxy_username"])
-            self.assertEquals(None, proxy_info["proxy_password"])
-            self.assertEquals("host", proxy_info["proxy_hostname"])
-            self.assertEquals(int("1111"), proxy_info["proxy_port"])
+        pa = patch.dict('os.environ', self._gen_env({'HTTPS_PROXY': 'http://host:1111'}))
+        pa.start()
+        proxy_info = get_env_proxy_info()
+        self.assertEquals(None, proxy_info["proxy_username"])
+        self.assertEquals(None, proxy_info["proxy_password"])
+        self.assertEquals("host", proxy_info["proxy_hostname"])
+        self.assertEquals(int("1111"), proxy_info["proxy_port"])
+        pa.stop()

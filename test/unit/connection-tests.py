@@ -63,41 +63,49 @@ class ConnectionTests(unittest.TestCase):
         self.assertTrue(self.cp.handler == "/Test")
 
     def test_https_proxy_info_allcaps(self):
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals("u", uep.proxy_user)
-            self.assertEquals("p", uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(int("4444"), uep.proxy_port)
+        pa = patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444'})
+        pa.start()
+        uep = UEPConnection(username="dummy", password="dummy",
+            handler="/Test/", insecure=True)
+        self.assertEquals("u", uep.proxy_user)
+        self.assertEquals("p", uep.proxy_password)
+        self.assertEquals("host", uep.proxy_hostname)
+        self.assertEquals(int("4444"), uep.proxy_port)
+        pa.stop()
 
     def test_order(self):
         # should follow the order: HTTPS, https, HTTP, http
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444', 'http_proxy': 'http://notme:orme@host:2222'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals("u", uep.proxy_user)
-            self.assertEquals("p", uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(int("4444"), uep.proxy_port)
+        pa = patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444', 'http_proxy': 'http://notme:orme@host:2222'})
+        pa.start()
+        uep = UEPConnection(username="dummy", password="dummy",
+            handler="/Test/", insecure=True)
+        self.assertEquals("u", uep.proxy_user)
+        self.assertEquals("p", uep.proxy_password)
+        self.assertEquals("host", uep.proxy_hostname)
+        self.assertEquals(int("4444"), uep.proxy_port)
+        pa.stop()
 
     def test_no_port(self):
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals("u", uep.proxy_user)
-            self.assertEquals("p", uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(3128, uep.proxy_port)
+        pa = patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host'})
+        pa.start()
+        uep = UEPConnection(username="dummy", password="dummy",
+            handler="/Test/", insecure=True)
+        self.assertEquals("u", uep.proxy_user)
+        self.assertEquals("p", uep.proxy_password)
+        self.assertEquals("host", uep.proxy_hostname)
+        self.assertEquals(3128, uep.proxy_port)
+        pa.stop()
 
     def test_no_user_or_password(self):
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://host:1111'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals(None, uep.proxy_user)
-            self.assertEquals(None, uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(int("1111"), uep.proxy_port)
+        pa = patch.dict('os.environ', {'HTTPS_PROXY': 'http://host:1111'})
+        pa.start()
+        uep = UEPConnection(username="dummy", password="dummy",
+            handler="/Test/", insecure=True)
+        self.assertEquals(None, uep.proxy_user)
+        self.assertEquals(None, uep.proxy_password)
+        self.assertEquals("host", uep.proxy_hostname)
+        self.assertEquals(int("1111"), uep.proxy_port)
+        pa.stop()
 
     def test_sanitizeGuestIds_supports_strs(self):
         self.cp.supports_resource = Mock(return_value=True)
