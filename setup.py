@@ -32,7 +32,7 @@ setup(
     include_package_data = True,
 
     ext_modules=[Extension('rhsm._certificate', ['src/certificate.c'],
-                           libraries=['ssl'], extra_link_args=['-lcrypto'])],
+                           libraries=['ssl', 'crypto'])],
 
     test_suite = 'nose.collector',
 
