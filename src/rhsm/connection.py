@@ -29,6 +29,7 @@ from M2Crypto import SSL, httpslib
 from M2Crypto.SSL import SSLError
 from M2Crypto import m2
 
+
 from urllib import urlencode
 
 from config import initConfig
@@ -88,10 +89,26 @@ def safe_int(value, safe_value=None):
 
 h = NullHandler()
 logging.getLogger("rhsm").addHandler(h)
+logging.getLogger("rhsm-ssl").addHandler(h)
 
 log = logging.getLogger(__name__)
+ssl_log = logging.getLogger("rhsm-ssl")
 
 config = initConfig()
+
+#
+#
+#
+##
+#
+# FIXME: REMOVE
+import pprint
+pp = pprint.pprint
+#
+#
+#
+#
+#
 
 
 def drift_check(utc_time_string, hours=1):
@@ -200,18 +217,132 @@ class ForbiddenException(AuthenticationException):
 
 
 class ExpiredIdentityCertException(ConnectionException):
-
     pass
 
+DEBUG = False
 
-class NoOpChecker:
 
-    def __init__(self, host=None, peerCertHash=None, peerCertDigest='sha1'):
-        self.host = host
-        self.fingerprint = peerCertHash
-        self.digest = peerCertDigest
+def show_peer_cert(peer_cert):
+
+    print
+    print "PEER CERT"
+    print "subject"
+    pp(peer_cert.get_subject().as_text())
+
+    ssl_log.debug(peer_cert.get_subject().as_text())
+    ssl_log.debug("foo")
+    print "issuer"
+    pp(peer_cert.get_issuer().as_text())
+
+    print "serial number"
+    pp(peer_cert.get_serial_number())
+
+    print "fingerprint md5"
+    pp(peer_cert.get_fingerprint())
+
+    print "sha1"
+    pp(peer_cert.get_fingerprint(md="sha1"))
+
+    print "sha256"
+    pp(peer_cert.get_fingerprint(md="sha256"))
+
+#    print "verify"
+#    print peer_cert.verify()
+
+    print "check_ca"
+    print peer_cert.check_ca()
+
+    print "check_purpose"
+    print peer_cert.check_purpose(m2.X509_PURPOSE_SSL_SERVER, 0)
+
+    print "as_txt"
+    print peer_cert.as_text()
+
+
+def show_ssl_info(connection, context):
+    if not DEBUG:
+        ssl_log.debug(connection)
+        ssl_log.debug(connection.get_session().as_text())
+        return
+
+    print "connection"
+    pp(connection)
+
+    print "session"
+    session = connection.get_session()
+    pp(session)
+    print session.as_text()
+
+    print "ssl_socket"
+    ssl_socket = connection.sock
+    pp(ssl_socket)
+
+    print "cipher_list"
+    pp(ssl_socket.get_cipher_list())
+
+    print "peer_cert"
+    peer_cert = ssl_socket.get_peer_cert()
+    show_peer_cert(peer_cert)
+
+    print "peer chain"
+    peer_chain = ssl_socket.get_peer_cert_chain()
+    pp(peer_chain)
+    print "peer chain length"
+    pp(len(peer_chain))
+
+    print "peer chain links"
+    inc = 0
+    for chain_link in peer_chain:
+        print "link %s" % inc
+        show_peer_cert(chain_link)
+        inc += 1
+
+    print "verify mode"
+    pp(ssl_socket.get_verify_mode())
+
+    print "verify result"
+    pp(ssl_socket.get_verify_result())
+
+    print "ssl version"
+    pp(ssl_socket.get_version())
+
+    ssl_context = context
+    print "ssl context"
+    pp(ssl_context)
+
+    #cert_store = ssl_context.get_cert_store()
+    #print "cert_store"
+    #pp(cert_store)
+
+    #print "cert_store.store"
+    #pp(cert_store.store)
+
+
+class LoggingChecker(SSL.Checker.Checker):
+    name = "Logging Default Checker"
 
     def __call__(self, peerCert, host=None):
+        self._log(peerCert, host)
+        res = SSL.Checker.Checker.__call__(self, peerCert, host)
+        print "Checker results: %s" % res
+        return res
+
+    def _log(self, peerCert, host):
+        if not DEBUG:
+            return
+        print self.name
+        print "\thost: %s fingerprint: %s digest: %s" % (self.host, self.fingerprint, self.digest)
+        print "\tpeerCert: %s host: %s" % (peerCert, host)
+
+        show_peer_cert(peerCert)
+
+
+class NoOpChecker(LoggingChecker):
+    name = "NoOp Checker"
+
+    def __call__(self, peerCert, host=None):
+        self._log(peerCert, host)
+        print "Checker results: N/A"
         return True
 
 
@@ -431,6 +562,7 @@ class Restlib(object):
 
     def _load_ca_certificates(self, context):
         loaded_ca_certs = []
+        res = None
         try:
             for cert_file in os.listdir(self.ca_dir):
                 if cert_file.endswith(".pem"):
@@ -444,6 +576,8 @@ class Restlib(object):
 
         if loaded_ca_certs:
             log.debug("Loaded CA certificates from %s: %s" % (self.ca_dir, ', '.join(loaded_ca_certs)))
+
+        return res
 
     # FIXME: can method be emtpty?
     def _request(self, request_type, method, info=None):
@@ -463,6 +597,9 @@ class Restlib(object):
         # Disable SSLv2 and SSLv3 support to avoid poodles.
         context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
+
+        context.set_info_callback()
+        context.post_connection_check = LoggingChecker()
         if self.insecure:  # allow clients to work insecure mode if required..
             context.post_connection_check = NoOpChecker()
         else:
@@ -509,6 +646,10 @@ class Restlib(object):
                 if not id_cert.is_valid():
                     raise ExpiredIdentityCertException()
             raise
+
+        # need to make the connect to get session info, etc
+        show_ssl_info(conn, context)
+
         response = conn.getresponse()
         result = {
             "content": response.read(),
