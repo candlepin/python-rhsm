@@ -220,102 +220,71 @@ class ExpiredIdentityCertException(ConnectionException):
     pass
 
 DEBUG = False
+if 'SUBMAN_SSL_DEBUG' in os.environ:
+    DEBUG = True
 
 
-def show_peer_cert(peer_cert):
+def log_peer_cert(peer_cert):
 
-    print
-    print "PEER CERT"
-    print "subject"
-    pp(peer_cert.get_subject().as_text())
+    ssl_log.debug("peer certificate:")
+    ssl_log.debug("subject: %s", peer_cert.get_subject().as_text())
+    ssl_log.debug("issuer: %s", peer_cert.get_issuer().as_text())
+    ssl_log.debug("serial: %s", peer_cert.get_serial_number())
+    ssl_log.debug("fingerprint(md5): %s", peer_cert.get_fingerprint())
+    ssl_log.debug("fingerprint(sha1): %s", peer_cert.get_fingerprint(md="sha1"))
+    ssl_log.debug("fingerprint(sha2): %s", peer_cert.get_fingerprint(md="sha256"))
+    ssl_log.debug("check_ca: %s", peer_cert.check_ca())
 
-    ssl_log.debug(peer_cert.get_subject().as_text())
-    ssl_log.debug("foo")
-    print "issuer"
-    pp(peer_cert.get_issuer().as_text())
+    ssl_log.debug("check_purpose(SSL_SERVER): %s",
+                  peer_cert.check_purpose(m2.X509_PURPOSE_SSL_SERVER, 0))
 
-    print "serial number"
-    pp(peer_cert.get_serial_number())
-
-    print "fingerprint md5"
-    pp(peer_cert.get_fingerprint())
-
-    print "sha1"
-    pp(peer_cert.get_fingerprint(md="sha1"))
-
-    print "sha256"
-    pp(peer_cert.get_fingerprint(md="sha256"))
-
-#    print "verify"
-#    print peer_cert.verify()
-
-    print "check_ca"
-    print peer_cert.check_ca()
-
-    print "check_purpose"
-    print peer_cert.check_purpose(m2.X509_PURPOSE_SSL_SERVER, 0)
-
-    print "as_txt"
-    print peer_cert.as_text()
+    for i in range(peer_cert.get_ext_count()):
+        ext = peer_cert.get_ext_at(i)
+        ssl_log.debug("extension: %s = %s  (critcal: %s)",
+                      ext.get_name(), ext.get_value(),
+                      ext.get_critical() or False)
+    #print "as_txt"
+    #print peer_cert.as_text()
 
 
-def show_ssl_info(connection, context):
+def log_ssl_info(connection, context):
     if not DEBUG:
-        ssl_log.debug(connection)
-        ssl_log.debug(connection.get_session().as_text())
         return
 
-    print "connection"
-    pp(connection)
+    ssl_log.debug("connection: %s", connection)
+    ssl_log.debug("context: %s", context)
 
-    print "session"
     session = connection.get_session()
-    pp(session)
-    print session.as_text()
+    ssl_log.debug("session: %s", session)
+    ssl_log.debug("session text: %s", session.as_text())
 
-    print "ssl_socket"
+    #print "ssl_socket"
     ssl_socket = connection.sock
-    pp(ssl_socket)
+    ssl_log.debug("cipher_list: %s", ssl_socket.get_cipher_list())
 
-    print "cipher_list"
-    pp(ssl_socket.get_cipher_list())
-
-    print "peer_cert"
     peer_cert = ssl_socket.get_peer_cert()
-    show_peer_cert(peer_cert)
+    log_peer_cert(peer_cert)
 
-    print "peer chain"
     peer_chain = ssl_socket.get_peer_cert_chain()
-    pp(peer_chain)
-    print "peer chain length"
-    pp(len(peer_chain))
+    ssl_log.debug("peer chain length: %s", len(peer_chain))
 
-    print "peer chain links"
     inc = 0
     for chain_link in peer_chain:
-        print "link %s" % inc
-        show_peer_cert(chain_link)
+        ssl_log.debug("peer chain link %s", inc)
+        log_peer_cert(chain_link)
         inc += 1
 
-    print "verify mode"
-    pp(ssl_socket.get_verify_mode())
+    ssl_log.debug("veryify_mode: %s", ssl_socket.get_verify_mode())
+    ssl_log.debug("verify_result: %s", ssl_socket.get_verify_result())
+    ssl_log.debug("tls version: %s", ssl_socket.get_version())
 
-    print "verify result"
-    pp(ssl_socket.get_verify_result())
-
-    print "ssl version"
-    pp(ssl_socket.get_version())
-
-    ssl_context = context
-    print "ssl context"
-    pp(ssl_context)
-
+    # This would be useful, but there are ref counting weirdness
     #cert_store = ssl_context.get_cert_store()
     #print "cert_store"
-    #pp(cert_store)
+    #ssl_log.debug(cert_store)
 
     #print "cert_store.store"
-    #pp(cert_store.store)
+    #ssl_log.debug(cert_store.store)
 
 
 class LoggingChecker(SSL.Checker.Checker):
@@ -324,25 +293,25 @@ class LoggingChecker(SSL.Checker.Checker):
     def __call__(self, peerCert, host=None):
         self._log(peerCert, host)
         res = SSL.Checker.Checker.__call__(self, peerCert, host)
-        print "Checker results: %s" % res
+        if not DEBUG:
+            ssl_log.debug("%s results: %s", self.name, res)
         return res
 
     def _log(self, peerCert, host):
         if not DEBUG:
             return
-        print self.name
-        print "\thost: %s fingerprint: %s digest: %s" % (self.host, self.fingerprint, self.digest)
-        print "\tpeerCert: %s host: %s" % (peerCert, host)
+        #ssl_log.debug("%s host: %s fingerprint: %s digest: %s", self.name, self.host, self.fingerprint, self.digest)
 
-        show_peer_cert(peerCert)
+        ssl_log.debug("%s peerCert: %s host: %s", self.name, peerCert, host)
+        log_peer_cert(peerCert)
 
 
 class NoOpChecker(LoggingChecker):
-    name = "NoOp Checker"
+    name = "insecure=1 Checker"
 
     def __call__(self, peerCert, host=None):
         self._log(peerCert, host)
-        print "Checker results: N/A"
+        ssl_log.debug("%s results: N/A", self.name)
         return True
 
 
@@ -648,7 +617,7 @@ class Restlib(object):
             raise
 
         # need to make the connect to get session info, etc
-        show_ssl_info(conn, context)
+        log_ssl_info(conn, context)
 
         response = conn.getresponse()
         result = {
