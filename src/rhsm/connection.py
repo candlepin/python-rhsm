@@ -29,7 +29,6 @@ from M2Crypto import SSL, httpslib
 from M2Crypto.SSL import SSLError
 from M2Crypto import m2
 
-
 from urllib import urlencode
 
 from config import initConfig
@@ -45,6 +44,7 @@ except ImportError:
 
 from rhsm import ourjson as json
 from rhsm.utils import get_env_proxy_info
+from rhsm import ssl_utils
 
 global_socket_timeout = 60
 timeout_altered = None
@@ -92,23 +92,8 @@ logging.getLogger("rhsm").addHandler(h)
 logging.getLogger("rhsm-ssl").addHandler(h)
 
 log = logging.getLogger(__name__)
-ssl_log = logging.getLogger("rhsm-ssl")
 
 config = initConfig()
-
-#
-#
-#
-##
-#
-# FIXME: REMOVE
-import pprint
-pp = pprint.pprint
-#
-#
-#
-#
-#
 
 
 def drift_check(utc_time_string, hours=1):
@@ -219,101 +204,6 @@ class ForbiddenException(AuthenticationException):
 class ExpiredIdentityCertException(ConnectionException):
     pass
 
-DEBUG = False
-if 'SUBMAN_SSL_DEBUG' in os.environ:
-    DEBUG = True
-
-
-def log_peer_cert(peer_cert):
-
-    ssl_log.debug("peer certificate:")
-    ssl_log.debug("subject: %s", peer_cert.get_subject().as_text())
-    ssl_log.debug("issuer: %s", peer_cert.get_issuer().as_text())
-    ssl_log.debug("serial: %s", peer_cert.get_serial_number())
-    ssl_log.debug("fingerprint(md5): %s", peer_cert.get_fingerprint())
-    ssl_log.debug("fingerprint(sha1): %s", peer_cert.get_fingerprint(md="sha1"))
-    ssl_log.debug("fingerprint(sha2): %s", peer_cert.get_fingerprint(md="sha256"))
-    ssl_log.debug("check_ca: %s", peer_cert.check_ca())
-
-    ssl_log.debug("check_purpose(SSL_SERVER): %s",
-                  peer_cert.check_purpose(m2.X509_PURPOSE_SSL_SERVER, 0))
-
-    for i in range(peer_cert.get_ext_count()):
-        ext = peer_cert.get_ext_at(i)
-        ssl_log.debug("extension: %s = %s  (critcal: %s)",
-                      ext.get_name(), ext.get_value(),
-                      ext.get_critical() or False)
-    #print "as_txt"
-    #print peer_cert.as_text()
-
-
-def log_ssl_info(connection, context):
-    if not DEBUG:
-        return
-
-    ssl_log.debug("connection: %s", connection)
-    ssl_log.debug("context: %s", context)
-
-    session = connection.get_session()
-    ssl_log.debug("session: %s", session)
-    ssl_log.debug("session text: %s", session.as_text())
-
-    #print "ssl_socket"
-    ssl_socket = connection.sock
-    ssl_log.debug("cipher_list: %s", ssl_socket.get_cipher_list())
-
-    peer_cert = ssl_socket.get_peer_cert()
-    log_peer_cert(peer_cert)
-
-    peer_chain = ssl_socket.get_peer_cert_chain()
-    ssl_log.debug("peer chain length: %s", len(peer_chain))
-
-    inc = 0
-    for chain_link in peer_chain:
-        ssl_log.debug("peer chain link %s", inc)
-        log_peer_cert(chain_link)
-        inc += 1
-
-    ssl_log.debug("veryify_mode: %s", ssl_socket.get_verify_mode())
-    ssl_log.debug("verify_result: %s", ssl_socket.get_verify_result())
-    ssl_log.debug("tls version: %s", ssl_socket.get_version())
-
-    # This would be useful, but there are ref counting weirdness
-    #cert_store = ssl_context.get_cert_store()
-    #print "cert_store"
-    #ssl_log.debug(cert_store)
-
-    #print "cert_store.store"
-    #ssl_log.debug(cert_store.store)
-
-
-class LoggingChecker(SSL.Checker.Checker):
-    name = "Logging Default Checker"
-
-    def __call__(self, peerCert, host=None):
-        self._log(peerCert, host)
-        res = SSL.Checker.Checker.__call__(self, peerCert, host)
-        if not DEBUG:
-            ssl_log.debug("%s results: %s", self.name, res)
-        return res
-
-    def _log(self, peerCert, host):
-        if not DEBUG:
-            return
-        #ssl_log.debug("%s host: %s fingerprint: %s digest: %s", self.name, self.host, self.fingerprint, self.digest)
-
-        ssl_log.debug("%s peerCert: %s host: %s", self.name, peerCert, host)
-        log_peer_cert(peerCert)
-
-
-class NoOpChecker(LoggingChecker):
-    name = "insecure=1 Checker"
-
-    def __call__(self, peerCert, host=None):
-        self._log(peerCert, host)
-        ssl_log.debug("%s results: N/A", self.name)
-        return True
-
 
 class RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
     # 2.7 httplib expects to be able to pass a body argument to
@@ -396,7 +286,9 @@ class ContentConnection(object):
         else:
             conn = httpslib.HTTPSConnection(self.host, safe_int(self.ssl_port), ssl_context=context)
 
+
         set_default_socket_timeout_if_python_2_3()
+        ssl_utils.log_ssl_info(conn, context)
 
         conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
         response = conn.getresponse()
@@ -566,11 +458,11 @@ class Restlib(object):
         # Disable SSLv2 and SSLv3 support to avoid poodles.
         context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
+        # context.set_info_callback()
+        context.post_connection_check = ssl_utils.LoggingChecker()
 
-        context.set_info_callback()
-        context.post_connection_check = LoggingChecker()
         if self.insecure:  # allow clients to work insecure mode if required..
-            context.post_connection_check = NoOpChecker()
+            context.post_connection_check = ssl_utils.NoOpChecker()
         else:
             # Proper peer verification is essential to prevent MITM attacks.
             context.set_verify(
@@ -617,7 +509,7 @@ class Restlib(object):
             raise
 
         # need to make the connect to get session info, etc
-        log_ssl_info(conn, context)
+        ssl_utils.log_ssl_info(conn, context)
 
         response = conn.getresponse()
         result = {
