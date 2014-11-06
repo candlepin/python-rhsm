@@ -467,7 +467,7 @@ class Restlib(object):
             # Proper peer verification is essential to prevent MITM attacks.
             context.set_verify(
                     SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
-                    self.ssl_verify_depth)
+                    ssl_utils.verify_callback)
             if self.ca_dir is not None:
                 self._load_ca_certificates(context)
         if self.cert_file and os.path.exists(self.cert_file):

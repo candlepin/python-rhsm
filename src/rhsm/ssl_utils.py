@@ -25,6 +25,22 @@ if 'RHSM_SSL_DEBUG' in os.environ:
 
 ssl_log = logging.getLogger("rhsm-ssl")
 
+def verify_callback(ok, store):
+    ssl_log.debug("ok: %s", ok)
+    ssl_log.debug("store: %s", store)
+    cert = store.get_current_cert()
+    ssl_log.debug("store.get_current_cert: %s", cert)
+    log_cert(cert)
+    return 1
+
+def verify_callback1(context, cert, errnum, errdepth, ok):
+    log_ssl_context(context)
+    log_cert(cert)
+    ssl_log.debug("errnum: %s", errnum)
+    ssl_log.debug("errdepth: %s", errdepth)
+    ssl_log.debug("ok: %s", ok)
+    return 1
+
 
 def log_cert(cert):
 
@@ -49,12 +65,16 @@ def log_cert(cert):
     #print peer_cert.as_text()
 
 
+def log_ssl_context(context):
+    ssl_log.debug("context: %s", context)
+
+
 def log_ssl_info(connection, context):
     if not SSL_DEBUG:
         return
 
     ssl_log.debug("connection: %s", connection)
-    ssl_log.debug("context: %s", context)
+    log_ssl_context(context)
 
     session = connection.get_session()
     ssl_log.debug("session: %s", session)
