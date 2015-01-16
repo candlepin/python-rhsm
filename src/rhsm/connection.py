@@ -520,6 +520,7 @@ class Restlib(object):
             "content": response.read(),
             "status": response.status,
         }
+
         response_log = 'Response: status=' + str(result['status'])
         if response.getheader('x-candlepin-request-uuid'):
             response_log = "%s, requestUuid=%s" % (response_log,
@@ -544,7 +545,7 @@ class Restlib(object):
     def validateResponse(self, response, request_type=None, handler=None):
 
         # FIXME: what are we supposed to do with a 204?
-        if str(response['status']) not in ["200", "204"]:
+        if str(response['status']) not in ["200", "202", "204"]:
             parsed = {}
             if not response.get('content'):
                 parsed = {}
@@ -1019,14 +1020,40 @@ class UEPConnection:
         method = '/consumers/%s/certificates/serials' % self.sanitize(consumerId)
         return self.conn.request_get(method)
 
+    def _buildBindByEntitlementPoolMethod(self, consumerId, poolId, quantity=None, async=False):
+        method = "/consumers/%s/entitlements?pool=%s" % (self.sanitize(consumerId), self.sanitize(poolId))
+        if quantity:
+            method = "%s&quantity=%s" % (method, quantity)
+        if async:
+            method = "%s&async=true" % (method)
+        return method
+
     def bindByEntitlementPool(self, consumerId, poolId, quantity=None):
         """
          Subscribe consumer to a subscription by pool ID.
         """
-        method = "/consumers/%s/entitlements?pool=%s" % (self.sanitize(consumerId), self.sanitize(poolId))
-        if quantity:
-            method = "%s&quantity=%s" % (method, quantity)
+        method = self._buildBindByEntitlementPoolMethod(consumerId=consumerId, poolId=poolId,
+                                                        quantity=quantity)
         return self.conn.request_post(method)
+
+    def bindByEntitlementPoolAsync(self, consumerId, poolId, quantity=None):
+        """Create and run a entitleByPoolJob on the uep and return it's id info.
+
+        Args are the same as bindByProduct().
+
+        The return value will be a serialized candlepin JobStatus object.
+        """
+        method = self._buildBindByEntitlementPoolMethod(consumerId=consumerId, poolId=poolId,
+                                                        quantity=quantity, async=True)
+        return self.conn.request_post(method)
+
+    def _buildBindByProductMethod(self, consumerId, products, async=False):
+        args = "&".join(["product=" + product.replace(" ", "%20")
+                        for product in products])
+        method = "/consumers/%s/entitlements?%s" % (str(consumerId), args)
+        if async:
+            method = "%s&async=true" % (method)
+        return method
 
     def bindByProduct(self, consumerId, products):
         """
@@ -1034,10 +1061,33 @@ class UEPConnection:
         This will cause the UEP to look for one or more pools which provide
         access to the given product.
         """
-        args = "&".join(["product=" + product.replace(" ", "%20")
-                        for product in products])
-        method = "/consumers/%s/entitlements?%s" % (str(consumerId), args)
+        method = self._buildBindByProductMethod(consumerId=consumerId,
+                                                products=products)
         return self.conn.request_post(method)
+
+    def bindByProductAsync(self, consumerId, products):
+        """Create and run a entitleByProductJob on the uep and return it's id info.
+
+        Args are the same as bindByProduct().
+
+        The return value will be a serialized candlepin JobStatus object.
+        """
+        method = self._buildBindByProductMethod(consumerId=consumerId,
+                                                products=products,
+                                                async=True)
+
+        return self.conn.request_post(method)
+
+    def _buildBindMethod(self, consumerId, entitle_date, async=False):
+        method = "/consumers/%s/entitlements" % (self.sanitize(consumerId))
+
+        # add the optional date to the url
+        if entitle_date:
+            method = "%s?entitle_date=%s" % (method,
+                    self.sanitize(entitle_date.isoformat(), plus=True))
+        if async:
+            method = "%s?async=true" % (method)
+        return method
 
     def bind(self, consumerId, entitle_date=None):
         """
@@ -1045,14 +1095,32 @@ class UEPConnection:
         system's products. This is useful for autosubscribe. Note that this is
         done on a best-effort basis, and there are cases when the server will
         not be able to fulfill the client's product certs with entitlements.
+
         """
-        method = "/consumers/%s/entitlements" % (self.sanitize(consumerId))
+        method = self._buildBindMethod(consumerId=consumerId,
+                                       entitle_date=entitle_date)
 
-        # add the optional date to the url
-        if entitle_date:
-            method = "%s?entitle_date=%s" % (method,
-                    self.sanitize(entitle_date.isoformat(), plus=True))
+        return self.conn.request_post(method)
 
+    def bindAsync(self, consumerId, entitle_date=None):
+        """Create and run a bind job on the uep and return it's id info.
+
+        This is equilivent to the bind() method, but instead of blocking on the
+        results, it instructs candlepin to create an EntitlerJob, and to return
+        the JobStatus representing it. Note this method has a different return
+        value than bind().
+
+        Client code will need to poll and use the getJob() method to check when
+        the job status is finished. Note that even when finished, only the job
+        status is returned (and not the data a normal bind would return). That info
+        will need to be gathered seperately (for ex, with a getCompliance call).
+
+        The return value will be a serialized candlepin JobStatus object.
+        """
+
+        method = self._buildBindMethod(consumerId=consumerId,
+                                       entitle_date=entitle_date,
+                                       async=True)
         return self.conn.request_post(method)
 
     def dryRunBind(self, consumer_uuid, service_level):
@@ -1248,6 +1316,23 @@ class UEPConnection:
         List the subscriptions for a particular owner.
         """
         method = "/owners/%s/subscriptions" % self.sanitize(owner_key)
+        results = self.conn.request_get(method)
+        return results
+
+    def getJob(self, job_id):
+        """
+        Returns the status of a candlepin job.
+        """
+        method = "/jobs/%s" % job_id
+        results = self.conn.request_get(method)
+        return results
+
+    def updateJobStatus(self, job_status):
+        """
+        Given a dict representing a candlepin JobStatus, check it's status.
+        """
+        # let key error bubble up
+        method = job_status['statusPath']
         results = self.conn.request_get(method)
         return results
 
