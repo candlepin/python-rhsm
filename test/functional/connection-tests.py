@@ -16,6 +16,7 @@
 import os
 import random
 import string
+import time
 import unittest
 
 from nose.plugins.attrib import attr
@@ -40,8 +41,8 @@ class ConnectionTests(unittest.TestCase):
         self.cp = UEPConnection(username="admin", password="admin",
                 insecure=True)
 
-        consumerInfo = self.cp.registerConsumer("test-consumer", "system", owner="admin")
-        self.consumer_uuid = consumerInfo['uuid']
+        self.consumer = self.cp.registerConsumer("test-consumer", "system", owner="admin")
+        self.consumer_uuid = self.consumer['uuid']
 
     def test_supports_resource(self):
         self.assertTrue(self.cp.supports_resource('consumers'))
@@ -139,15 +140,34 @@ class ConnectionTests(unittest.TestCase):
 
 
 @attr('functional')
-class BindRequestTests(unittest.TestCase):
+class BaseBindRequest(unittest.TestCase):
     def setUp(self):
         self.cp = UEPConnection(username="admin", password="admin",
-                insecure=True)
+                                insecure=True)
 
-        consumerInfo = self.cp.registerConsumer("test-consumer", "system", owner="admin")
-        self.consumer_uuid = consumerInfo['uuid']
+        test_facts = {'cpu.cpu_socket(s)': '2',
+                      'cpu.cpu_core(s)': '2',
+                      'virt.is_guest': False,
+                      'system.certificate_version': '3.2',
+                      'uname.machine': 'x86_64',
+                      'distribution.version': '7.1'}
+        installed_products = [{'productName': 'Awesome OS Server Bits',
+                               'arch': 'ALL',
+                               'version': '6.1',
+                               'productId': '37060'}]
 
-    @patch.object(Restlib,'validateResponse')
+        self.consumer = self.cp.registerConsumer("test-consumer", "system", owner="admin",
+                                                facts=test_facts, installed_products=installed_products)
+        self.consumer_uuid = self.consumer['uuid']
+
+    def tearDown(self):
+        self.cp.unregisterConsumer(self.consumer_uuid)
+        self.consumer = None
+
+
+@attr('functional')
+class BindRequestTests(BaseBindRequest):
+    @patch.object(Restlib, 'validateResponse')
     @patch('rhsm.connection.drift_check', return_value=False)
     @patch('M2Crypto.httpslib.HTTPSConnection', auto_spec=True)
     def test_bind_no_args(self, mock_conn, mock_drift, mock_validate):
@@ -162,16 +182,111 @@ class BindRequestTests(unittest.TestCase):
             if name == '().request':
                 self.assertEquals(None, kwargs['body'])
 
-    @patch.object(Restlib,'validateResponse')
-    @patch('rhsm.connection.drift_check', return_value=False)
-    @patch('M2Crypto.httpslib.HTTPSConnection', auto_spec=True)
-    def test_bind_by_pool(self, mock_conn, mock_drift, mock_validate):
+    def test_bind_by_product(self):
+        test_product = "37060"
+
+        results = self.cp.bindByProduct(self.consumer_uuid,
+                                       [test_product])
+        self.assertTrue(results is not None)
+        self.assertTrue('certificates' in results[0])
+
+    def test_bind_by_pool(self):
         # this test is just to verify we make the httplib connection with
         # right args, we don't validate the bind here
-        self.cp.bindByEntitlementPool(self.consumer_uuid, '123121111', '1')
-        for (name, args, kwargs) in mock_conn.mock_calls:
-            if name == '().request':
-                self.assertEquals(None, kwargs['body'])
+
+        pools = self.cp.getPoolsList(self.consumer_uuid)
+        results = self.cp.bindByEntitlementPool(self.consumer_uuid, pools[0]['id'], '1')
+
+        self.assertTrue('certificates' in results[0])
+
+    def test_auto_bind(self):
+        self.cp.bind(self.consumer_uuid)
+
+        compliance = self.cp.getCompliance(self.consumer_uuid)
+        self.assertTrue('status' in compliance)
+        self.assertEqual(compliance['status'], 'valid')
+
+        # this returns an empty body, so nothing to verify
+        # other than not raising rhsm exceptions
+        #self.assertTrue('certificates' in result[0])
+
+
+@attr('functional')
+class AsyncBindRequestTests(BaseBindRequest):
+    def test_async_bind_by_product(self):
+        test_product = "37060"
+
+        result = self.cp.bindByProductAsync(self.consumer_uuid,
+                                            [test_product])
+        self.assertTrue(result is not None)
+        self.assertTrue('id' in result)
+        self.assertTrue('statusPath' in result)
+
+        job_result = self._wait_for_job(result['id'])
+        self._verify_job(job_result)
+
+        # Note: no data is returned from the request,
+        # need to verify that some other way
+        compliance = self.cp.getCompliance(self.consumer_uuid)
+        self.assertTrue('compliantProducts' in compliance)
+        compliant_products = compliance['compliantProducts']
+        self.assertTrue(test_product in compliant_products)
+        self.assertEqual(compliance['status'], 'valid')
+
+    def test_async_bind_by_pool(self):
+        pools = self.cp.getPoolsList(self.consumer_uuid)
+        installed_product = '37060'
+        product_to_pool = {}
+        for pool in pools:
+            provided_products = pool['providedProducts']
+            for provided_product in provided_products:
+                # just keep the last one
+                product_to_pool[provided_product['productId']] = pool['id']
+
+        target_pool = product_to_pool[installed_product]
+        result = self.cp.bindByEntitlementPoolAsync(self.consumer_uuid,
+                                                    target_pool, '1')
+        self.assertTrue('id' in result)
+
+        job_result = self._wait_for_job(result['id'])
+        self._verify_job(job_result)
+
+        compliance = self.cp.getCompliance(self.consumer_uuid)
+        self.assertTrue('status' in compliance)
+        self.assertEqual(compliance['status'], 'valid')
+        self.assertTrue(installed_product in compliance['compliantProducts'])
+
+    def test_async_auto_bind(self):
+        result = self.cp.bindAsync(self.consumer_uuid)
+        self.assertTrue(result is not None)
+        self.assertTrue('id' in result)
+
+        job_result = self._wait_for_job(result['id'])
+
+        self._verify_job(job_result)
+
+        compliance = self.cp.getCompliance(self.consumer_uuid)
+        self.assertTrue('status' in compliance)
+        self.assertEqual(compliance['status'], 'valid')
+
+    def _verify_job(self, job_results):
+        self.assertTrue(job_results['done'])
+        self.assertFalse(job_results['state'] == "FAILED")
+
+    # TODO: replace this with an event loop and event source
+    def _wait_for_job(self, job_id, wait_interval=2, max_attempts=6):
+        # if it's not ready in 30s, reason enough to fail the test
+        attempt_count = 0
+        while(attempt_count < max_attempts):
+            job_status = self.cp.getJob(job_id)
+
+            if job_status['done']:
+                return job_status
+
+            attempt_count += 1
+            time.sleep(wait_interval)
+
+        return None
 
 
 @attr('functional')
