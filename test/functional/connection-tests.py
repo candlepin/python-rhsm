@@ -20,10 +20,10 @@ import unittest
 
 from nose.plugins.attrib import attr
 
-from rhsm.connection import ContentConnection, UEPConnection, drift_check, Restlib,\
-    UnauthorizedException, ForbiddenException, AuthenticationException, RestlibException, \
-    RemoteServerException
-from mock import patch
+from rhsm.connection import ContentConnection, UEPConnection, \
+    UnauthorizedException, ForbiddenException, RestlibException, \
+    RhsmResponseValidator, ConnectionException
+from mock import patch, NonCallableMock
 
 
 def random_string(name, target_length=32):
@@ -147,10 +147,9 @@ class BindRequestTests(unittest.TestCase):
         consumerInfo = self.cp.registerConsumer("test-consumer", "system", owner="admin")
         self.consumer_uuid = consumerInfo['uuid']
 
-    @patch.object(Restlib,'validateResponse')
     @patch('rhsm.connection.drift_check', return_value=False)
     @patch('M2Crypto.httpslib.HTTPSConnection', auto_spec=True)
-    def test_bind_no_args(self, mock_conn, mock_drift, mock_validate):
+    def test_bind_no_args(self, mock_conn, mock_drift):
 
         self.cp.bind(self.consumer_uuid)
 
@@ -162,13 +161,15 @@ class BindRequestTests(unittest.TestCase):
             if name == '().request':
                 self.assertEquals(None, kwargs['body'])
 
-    @patch.object(Restlib,'validateResponse')
     @patch('rhsm.connection.drift_check', return_value=False)
     @patch('M2Crypto.httpslib.HTTPSConnection', auto_spec=True)
-    def test_bind_by_pool(self, mock_conn, mock_drift, mock_validate):
+    def test_bind_by_pool(self, mock_conn, mock_drift):
         # this test is just to verify we make the httplib connection with
         # right args, we don't validate the bind here
-        self.cp.bindByEntitlementPool(self.consumer_uuid, '123121111', '1')
+        try:
+            self.cp.bindByEntitlementPool(self.consumer_uuid, '123121111', '1')
+        except ConnectionException:
+            pass
         for (name, args, kwargs) in mock_conn.mock_calls:
             if name == '().request':
                 self.assertEquals(None, kwargs['body'])
@@ -236,14 +237,20 @@ class RestlibTests(unittest.TestCase):
         self.request_type = "GET"
         self.handler = "https://server/path"
 
+
+@attr('functional')
+class ValidateResponseTests(unittest.TestCase):
+    def setUp(self):
+        self.vr = RhsmResponseValidator()
+
     def _validate_response(self, response):
         # wrapper to specify request_type and handler
-        return self.conn.validateResponse(response,
-                                          request_type=self.request_type,
-                                          handler=self.handler)
+        return self.vr.validate(response)
 
     def test_invalid_credentitals_thrown_on_401_with_empty_body(self):
-        mock_response = {"status": 401}
+        mock_response = NonCallableMock()
+        mock_response.status_code = 401
+        mock_response.text = ''
         self.assertRaises(UnauthorizedException, self._validate_response,
                           mock_response)
 
@@ -254,7 +261,9 @@ class RestlibTests(unittest.TestCase):
         self._run_standard_error_handling_test_invalid_json(401, UnauthorizedException)
 
     def test_invalid_credentitals_thrown_on_403_with_empty_body(self):
-        mock_response = {"status": 403}
+        mock_response = NonCallableMock()
+        mock_response.status_code = 403
+        mock_response.text = ''
         self.assertRaises(ForbiddenException, self._validate_response,
                           mock_response)
 
@@ -266,8 +275,10 @@ class RestlibTests(unittest.TestCase):
 
     def _run_standard_error_handling_test_invalid_json(self, expected_error_code,
                                                        expected_exception):
-        mock_response = {"status": expected_error_code,
-                         "content": '<this is not valid json>>'}
+
+        mock_response = NonCallableMock()
+        mock_response.status_code = expected_error_code
+        mock_response.text = '<this is invalid json>>'
 
         self._check_for_remote_server_exception(expected_error_code,
                                                 expected_exception,
@@ -275,8 +286,9 @@ class RestlibTests(unittest.TestCase):
 
     def _run_standard_error_handling_test(self, expected_error):
         expected_error = "My Expected Error."
-        mock_response = {"status": expected_error,
-                         "content": '{"displayMessage":"%s"}' % expected_error}
+        mock_response = NonCallableMock()
+        mock_response.status_code = expected_error
+        mock_response.text = '{"displayMessage":"%s"}' % expected_error
 
         try:
             self._validate_response(mock_response)

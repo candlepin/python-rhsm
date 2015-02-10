@@ -27,7 +27,7 @@ import urllib
 
 import requests
 
-from M2Crypto import SSL, httpslib
+from M2Crypto import SSL
 from M2Crypto.SSL import SSLError
 from M2Crypto import m2
 
@@ -278,15 +278,13 @@ class ContentConnection(object):
 #        else:
 #            conn = httpslib.HTTPSConnection(self.host, safe_int(self.ssl_port), ssl_context=context)
 
-        set_default_socket_timeout_if_python_2_3()
+        #conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
+        #response = conn.getresponse()
+        #result = {
+        #    "content": response.read(),
+        #    "status": response.status}
 
-        conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
-        response = conn.getresponse()
-        result = {
-            "content": response.read(),
-            "status": response.status}
-
-        return result
+        #return result
 
     def _load_ca_certificates(self, context):
         try:
@@ -306,7 +304,7 @@ class ContentConnection(object):
 
     def test(self):
         pass
-#
+
     def request_get(self, method):
         return self._request("GET", method)
 
@@ -342,67 +340,115 @@ def _get_locale():
     return None
 
 
+class JsonDecoder(object):
+    @classmethod
+    def decode_list(cls, data):
+        rv = []
+        for item in data:
+            if isinstance(item, unicode):
+                item = item.encode('utf-8')
+            elif isinstance(item, list):
+                item = cls.decode_list(item)
+            elif isinstance(item, dict):
+                item = cls.decode_dict(item)
+            rv.append(item)
+        return rv
+
+    @classmethod
+    def decode_dict(cls, data):
+        rv = {}
+        for key, value in data.iteritems():
+            if isinstance(key, unicode):
+                key = key.encode('utf-8')
+            if isinstance(value, unicode):
+                value = value.encode('utf-8')
+            elif isinstance(value, list):
+                value = cls.decode_list(value)
+            elif isinstance(value, dict):
+                value = cls.decode_dict(value)
+            rv[key] = value
+        return rv
+
+
 class RhsmResponseValidator(object):
-    def __init__(self, json_decoder_method=None):
-        self.json_decoder_method = json_decoder_method
+    def __init__(self):
+        self.json_decoder = JsonDecoder.decode_dict
 
-    def validate(self, response, request_type=None, handler=None):
+    def try_to_parse(self, response):
+        # got some status code that might be an error
+        # try vaguely to see if it had a json parseable body
+        try:
+            return json.loads(response.text,
+                              object_hook=self.json_decoder)
+        except ValueError, e:
+            log.error("Response: %s" % response.status_code)
+            log.error("JSON parsing error: %s" % e)
+        except Exception, e:
+            log.error("Response: %s" % response.status_code)
+            log.exception(e)
 
-        #response.status_code
-        #response.text
-        # request_type = response.request.method
-        # handler = response.request.path_url
-        # FIXME: what are we supposed to do with a 204?
-        if str(response['status']) not in ["200", "204"]:
-            parsed = {}
-            if not response.get('content'):
-                parsed = {}
-            else:
-                # try vaguely to see if it had a json parseable body
-                try:
-                    parsed = json.loads(response['content'],
-                                        object_hook=self.json_decoder_method)
-                except ValueError, e:
-                    log.error("Response: %s" % response['status'])
-                    log.error("JSON parsing error: %s" % e)
-                except Exception, e:
-                    log.error("Response: %s" % response['status'])
-                    log.exception(e)
+        return None
 
-            if parsed:
-                # find and raise a GoneException on '410' with 'deleteId' in the
-                # content, implying that the resource has been deleted
-                # NOTE: a 410 with a unparseable content will raise
-                # RemoteServerException
-                if str(response['status']) == "410":
-                    raise GoneException(response['status'],
-                        parsed['displayMessage'], parsed['deletedId'])
+    def validate(self, response):
+        status_code = response.status_code
+        if status_code in [200, 202, 204]:
+            return
 
-                # I guess this is where we would have an exception mapper if we
-                # had more meaningful exceptions. We've gotten a response from
-                # the server that means something.
+        parsed_response = None
 
-                # FIXME: we can get here with a valid json response that
-                # could be anything, we don't verify it anymore
-                error_msg = self._parse_msg_from_error_response_body(parsed)
-                raise RestlibException(response['status'], error_msg)
-            else:
-                # This really needs an exception mapper too...
-                if str(response['status']) in ["404", "410", "500", "502", "503", "504"]:
-                    raise RemoteServerException(response['status'],
-                                                request_type=request_type,
-                                                handler=handler)
-                elif str(response['status']) in ["401"]:
-                    raise UnauthorizedException(response['status'],
-                                                request_type=request_type,
-                                                handler=handler)
-                elif str(response['status']) in ["403"]:
-                    raise ForbiddenException(response['status'],
-                                             request_type=request_type,
-                                             handler=handler)
-                else:
-                    # unexpected with no valid content
-                    raise NetworkException(response['status'])
+        if response.text:
+            parsed_response = self.try_to_parse(response)
+
+        if not parsed_response:
+            self.raise_exception_based_on_status_code(response)
+            return
+
+        # see if we have been deleted and hit a 410
+        self.check_for_gone(status_code, parsed_response)
+
+        # I guess this is where we would have an exception mapper if we
+        # had more meaningful exceptions. We've gotten a response from
+        # the server that means something.
+
+        # FIXME: we can get here with a valid json response that
+        # could be anything, we don't verify it anymore
+        error_msg = self._parse_msg_from_error_response_body(parsed_response)
+        raise RestlibException(status_code, error_msg)
+
+    def check_for_gone(self, status_code, parsed_response):
+        # find and raise a GoneException on '410' with 'deleteId' in the
+        # content, implying that the resource has been deleted
+        # NOTE: a 410 with a unparseable content will raise
+        # RemoteServerException
+        if status_code != 410:
+            return
+
+        if 'deletedId' in parsed_response:
+            raise GoneException(status_code,
+                                parsed_response['displayMessage'],
+                                parsed_response['deletedId'])
+
+    def raise_exception_based_on_status_code(self, response):
+        # This really needs an exception mapper too...
+        status_code = response.status_code
+        request_type = response.request.method
+        handler = response.request.path_url
+
+        if status_code in [404, 410, 500, 502, 503, 504]:
+            raise RemoteServerException(status_code,
+                                        request_type=request_type,
+                                        handler=handler)
+        elif status_code in [401]:
+            raise UnauthorizedException(status_code,
+                                        request_type=request_type,
+                                        handler=handler)
+        elif status_code in [403]:
+            raise ForbiddenException(status_code,
+                                     request_type=request_type,
+                                     handler=handler)
+        else:
+            # unexpected with no valid content
+            raise NetworkException(status_code)
 
     def _parse_msg_from_error_response_body(self, body):
 
@@ -413,6 +459,7 @@ class RhsmResponseValidator(object):
         # New style list of error messages:
         if 'errors' in body:
             return " ".join("%s" % errmsg for errmsg in body['errors'])
+
 
 # FIXME: it would be nice if the ssl server connection stuff
 # was decomposed from the api handling parts
@@ -499,32 +546,6 @@ class Restlib(object):
     def _setup_server_cert_no_verify(self):
         self.requests_session.verify = False
 
-    def _decode_list(self, data):
-        rv = []
-        for item in data:
-            if isinstance(item, unicode):
-                item = item.encode('utf-8')
-            elif isinstance(item, list):
-                item = self._decode_list(item)
-            elif isinstance(item, dict):
-                item = self._decode_dict(item)
-            rv.append(item)
-        return rv
-
-    def _decode_dict(self, data):
-        rv = {}
-        for key, value in data.iteritems():
-            if isinstance(key, unicode):
-                key = key.encode('utf-8')
-            if isinstance(value, unicode):
-                value = value.encode('utf-8')
-            elif isinstance(value, list):
-                value = self._decode_list(value)
-            elif isinstance(value, dict):
-                value = self._decode_dict(value)
-            rv[key] = value
-        return rv
-
     def _load_ca_certificates(self, context):
         loaded_ca_certs = []
         try:
@@ -543,7 +564,6 @@ class Restlib(object):
 
     # FIXME: can method be emtpty?
     def _request(self, request_type, method, info=None):
-        handler = self.apihandler + method
 
         # See M2Crypto/SSL/Context.py in m2crypto source and
         # https://www.openssl.org/docs/ssl/SSL_CTX_new.html
@@ -559,7 +579,6 @@ class Restlib(object):
         # Disable SSLv2 and SSLv3 support to avoid poodles.
         context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
-
         # TBD: if requests verify=False is sufficient
         if self.insecure:  # allow clients to work insecure mode if required..
             context.post_connection_check = NoOpChecker()
@@ -571,12 +590,11 @@ class Restlib(object):
             if self.ca_dir is not None:
                 self._load_ca_certificates(context)
 
-        response = conn.getresponse()
-        result = {
-            "content": response.read(),
-            "status": response.status,
-        }
-
+        #response = conn.getresponse()
+        #result = {
+        #    "content": response.read(),
+        #    "status": response.status,
+        #}
 
     def json_dumps(self, info=None):
         data = None
@@ -589,7 +607,7 @@ class Restlib(object):
         if not len(response_body):
             return None
 
-        return json.loads(response_body, object_hook=self._decode_dict)
+        return json.loads(response_body, object_hook=JsonDecoder.decode_dict)
 
     # can and will raise exceptions
     def check_response(self, response):
@@ -606,17 +624,9 @@ class Restlib(object):
         log.debug("Response: status=%s requestUuid=%s",
                   response.status_code, response.headers.get('x-candepin-request-uuid') or '')
 
-    # can and will raise exceptions
     def validate_response(self, response):
-        old_response = {'status': "%s" % response.status_code,
-                        'content': response.text}
-        request_type = response.request.method
-        handler = response.request.path_url
-        self.validateResponse(old_response, request_type, handler)
-
-    def validateResponse(self, response, request_type=None, handler=None):
-        validator = RhsmResponseValidator(json_decoder_method=self._decode_dict)
-        validator.validate(response, request_type, handler)
+        validator = RhsmResponseValidator()
+        validator.validate(response)
 
     def full_url(self, url_fragment):
         # url join? candlepin is picky about extra /'s
