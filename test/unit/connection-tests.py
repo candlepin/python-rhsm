@@ -20,9 +20,10 @@ import unittest
 from rhsm.connection import UEPConnection, Restlib, ConnectionException, ConnectionSetupException, \
         BadCertificateException, RestlibException, GoneException, NetworkException, \
         RemoteServerException, drift_check, ExpiredIdentityCertException, UnauthorizedException, \
-        ForbiddenException, AuthenticationException, set_default_socket_timeout_if_python_2_3
 
-from mock import Mock, patch
+        ForbiddenException, AuthenticationException, JsonDecoder, RhsmResponseValidator, set_default_socket_timeout_if_python_2_3
+
+from mock import Mock, NonCallableMock, patch
 from datetime import date
 from time import strftime, gmtime
 from rhsm import ourjson as json
@@ -131,41 +132,44 @@ class ConnectionTests(unittest.TestCase):
         self.assertEquals(expected_guestIds, resultGuestIds)
 
 
-class RestlibValidateResponseTests(unittest.TestCase):
+class RhsmResponseValidateResponseTests(unittest.TestCase):
     def setUp(self):
-        self.restlib = Restlib("somehost", "123", "somehandler")
         self.request_type = "GET"
         self.handler = "https://server/path"
 
     def vr(self, status, content):
-        response = {'status': status,
-                    'content': content}
+        mock_response = NonCallableMock()
+        mock_response.status_code = status
+        mock_response.text = content
+        mock_response.request.path_url = self.handler
+        mock_response.request.method = self.request_type
         #print "response", response
-        self.restlib.validateResponse(response, self.request_type, self.handler)
+        response_validator = RhsmResponseValidator()
+        response_validator.validate(mock_response)
 
     # All empty responses that aren't 200/204 raise a NetworkException
     def test_200_empty(self):
         # this should just not raise any exceptions
-        self.vr("200", "")
+        self.vr(200, "")
 
     def test_200_json(self):
         # no exceptions
         content = u'{"something": "whatever"}'
-        self.vr("200", content)
+        self.vr(200, content)
 
     # 202 ACCEPTED
     def test_202_empty(self):
-        self.assertRaises(NetworkException, self.vr, "202", "")
+        self.assertRaises(NetworkException, self.vr, 202, "")
 
     def test_202_none(self):
-        self.assertRaises(NetworkException, self.vr, "202", None)
+        self.assertRaises(NetworkException, self.vr, 202, None)
 
     def test_202_json(self):
         content = u'{"something": "whatever"}'
         try:
-            self.vr("202", content)
+            self.vr(202, content)
         except RestlibException, e:
-            self.assertEquals("202", e.code)
+            self.assertEquals(202, e.code)
 #            self.assertEquals(self.request_type, e.request_type)
 #            self.assertEquals(self.handler, e.handler)
             self.assertTrue(e.msg is "")
@@ -175,11 +179,11 @@ class RestlibValidateResponseTests(unittest.TestCase):
     # 204 NO CONTENT
     # no exceptions is okay
     def test_204_empty(self):
-        self.vr("204", "")
+        self.vr(204, "")
 
     # no exceptions is okay
     def test_204_none(self):
-        self.vr("204", None)
+        self.vr(204, None)
 
     # MOVED PERMANENTLY
     # FIXME: implement 301 support?
@@ -194,15 +198,15 @@ class RestlibValidateResponseTests(unittest.TestCase):
         #        RemoteServerException
         self.assertRaises(NetworkException,
                           self.vr,
-                          "400",
+                          400,
                           "")
 
     def test_401_empty(self):
         try:
-            self.vr("401", "")
+            self.vr(401, "")
         except UnauthorizedException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
                        "Unauthorized: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -212,10 +216,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_401_invalid_json(self):
         content = u'{this is not json</> dfsdf"" '
         try:
-            self.vr("401", content)
+            self.vr(401, content)
         except UnauthorizedException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
                        "Unauthorized: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -227,10 +231,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
         mock_json_loads.side_effect = Exception
         content = u'{"errors": ["Forbidden message"]}'
         try:
-            self.vr("401", content)
+            self.vr(401, content)
         except UnauthorizedException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
                        "Unauthorized: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -240,19 +244,19 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_403_valid(self):
         content = u'{"errors": ["Forbidden message"]}'
         try:
-            self.vr("403", content)
+            self.vr(403, content)
         except RestlibException, e:
-            self.assertEquals("403", e.code)
+            self.assertEquals(403, e.code)
             self.assertEquals("Forbidden message", e.msg)
         else:
             self.fails("Should have raised a RestlibException")
 
     def test_403_empty(self):
         try:
-            self.vr("403", "")
+            self.vr(403, "")
         except ForbiddenException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("403", e.code)
+            self.assertEquals(403, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 403\n" \
                        "Forbidden: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -262,20 +266,20 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_401_valid(self):
         content = u'{"errors": ["Unauthorized message"]}'
         try:
-            self.vr("401", content)
+            self.vr(401, content)
         except RestlibException, e:
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             self.assertEquals("Unauthorized message", e.msg)
         else:
             self.fails("Should have raised a RestlibException")
 
     def test_404_empty(self):
         try:
-            self.vr("404", "")
+            self.vr(404, "")
         except RemoteServerException, e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
             self.assertEquals("Server error attempting a GET to https://server/path returned status 404", str(e))
         else:
             self.fails("Should have raise RemoteServerException")
@@ -283,9 +287,9 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_valid_but_irrelevant_json(self):
         content = u'{"something": "whatever"}'
         try:
-            self.vr("404", content)
+            self.vr(404, content)
         except RestlibException, e:
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
             self.assertEquals("", e.msg)
         else:
             self.fails("Should have raised a RemoteServerException")
@@ -293,10 +297,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_valid_body_old_style(self):
         content = u'{"displayMessage": "not found"}'
         try:
-            self.vr("404", content)
+            self.vr(404, content)
         except RestlibException, e:
             self.assertEquals("not found", e.msg)
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
         except Exception, e:
             self.fail("RestlibException expected, got %s" % e)
         else:
@@ -305,10 +309,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_valid_body(self):
         content = u'{"errors": ["not found", "still not found"]}'
         try:
-            self.vr("404", content)
+            self.vr(404, content)
         except RestlibException, e:
             self.assertEquals("not found still not found", e.msg)
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
         except Exception, e:
             self.fail("RestlibException expected, got %s" % e)
         else:
@@ -316,7 +320,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
 
     def test_410_emtpy(self):
         try:
-            self.vr("410", "")
+            self.vr(410, "")
         except RemoteServerException, e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
@@ -327,17 +331,17 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"displayMessage": "foo", "deletedId": "12345"}'
         #self.assertRaises(GoneException, self.vr, "410", content)
         try:
-            self.vr("410", content)
+            self.vr(410, content)
         except GoneException, e:
             self.assertEquals("12345", e.deleted_id)
             self.assertEquals("foo", e.msg)
-            self.assertEquals("410", e.code)
+            self.assertEquals(410, e.code)
         else:
             self.fail("Should have raised a GoneException")
 
     def test_500_empty(self):
         try:
-            self.vr("500", "")
+            self.vr(500, "")
         except RemoteServerException, e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
@@ -345,12 +349,12 @@ class RestlibValidateResponseTests(unittest.TestCase):
             self.fail("RemoteServerException expected")
 
     def test_599_emtpty(self):
-        self.assertRaises(NetworkException, self.vr, "599", "")
+        self.assertRaises(NetworkException, self.vr, 599, "")
 
 
-class RestlibTests(unittest.TestCase):
-
-    def test_json_uft8_encoding(self):
+class JsonDecoderTests(unittest.TestCase):
+    # the default Restlib tries to load ca certs
+    def test_json_utf8_encoding(self):
         # A unicode string containing JSON
         test_json = u"""
             {
@@ -365,8 +369,7 @@ class RestlibTests(unittest.TestCase):
                 ]
             }
         """
-        restlib = Restlib("somehost", "123", "somehandler")
-        data = json.loads(test_json, object_hook=restlib._decode_dict)
+        data = json.loads(test_json, object_hook=JsonDecoder.decode_dict)
         self.assertTrue(isinstance(data["message"], str))
         # Access a value deep in the structure to make sure we recursed down.
         self.assertTrue(isinstance(data["phoneNumbers"][0][0]["type"], str))
