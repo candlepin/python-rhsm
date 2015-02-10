@@ -391,7 +391,7 @@ class RhsmResponseValidator(object):
 
     def validate(self, response):
         status_code = response.status_code
-        if status_code in [200, 202, 204]:
+        if status_code in [200, 204]:
             return
 
         parsed_response = None
@@ -521,8 +521,8 @@ class Restlib(object):
             if self.proxy_user and self.proxy_password:
                 proxy_auth = "%s:%s@" % (self.proxy_user, self.proxy_password)
             proxy_url = "http://%s%s:%s/" % (proxy_auth, self.proxy_hostname, self.proxy_port)
-            self.requests.proxy = {'https': proxy_url,
-                                   'http': proxy_url}
+            self.requests_session.proxy = {'https': proxy_url,
+                                           'http': proxy_url}
 
     def _setup_session(self):
         self.requests_session = requests.Session()
@@ -627,6 +627,8 @@ class Restlib(object):
     def validate_response(self, response):
         validator = RhsmResponseValidator()
         validator.validate(response)
+
+    # FIXME: do we need to provide compat for validateResponse?
 
     def full_url(self, url_fragment):
         # url join? candlepin is picky about extra /'s
