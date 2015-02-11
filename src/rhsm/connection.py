@@ -27,10 +27,6 @@ import urllib
 
 import requests
 
-from M2Crypto import SSL
-from M2Crypto.SSL import SSLError
-from M2Crypto import m2
-
 from urllib import urlencode
 
 from config import initConfig
@@ -219,7 +215,7 @@ class NoOpChecker:
 
 # FIXME: this is terrible, we need to refactor
 # Restlib to be Restlib based on a https client class
-class ContentConnection(object):
+class OldContentConnection(object):
     def __init__(self, host, ssl_port=None,
                  username=None, password=None,
                  proxy_hostname=None, proxy_port=None,
@@ -259,13 +255,14 @@ class ContentConnection(object):
         self.proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
 
     def _request(self, request_type, handler, body=None):
+        pass
         # See note in Restlib._request
-        context = SSL.Context("sslv23")
+        #context = SSL.Context("sslv23")
 
         # Disable SSLv2 and SSLv3 support to avoid poodles.
-        context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
+        #context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
-        self._load_ca_certificates(context)
+        #self._load_ca_certificates(context)
 
 #        if self.proxy_hostname and self.proxy_port:
 #            log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
@@ -507,6 +504,8 @@ class Restlib(object):
 
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
 
+        # We could use custom Auth types
+        # We could set connect and read timeouts
         self._setup_session()
         self._setup_proxy()
         self._setup_server_cert_verify()
@@ -564,7 +563,7 @@ class Restlib(object):
 
     # FIXME: can method be emtpty?
     def _request(self, request_type, method, info=None):
-
+        pass
         # See M2Crypto/SSL/Context.py in m2crypto source and
         # https://www.openssl.org/docs/ssl/SSL_CTX_new.html
         # This ends up invoking SSLv23_method, which is the catch all
@@ -574,21 +573,21 @@ class Restlib(object):
         # intends to not offer sslv3, it's workable.
         #
         # So this supports tls1.2, 1.1, 1.0, and/or sslv3 if supported.
-        context = SSL.Context("sslv23")
+        #context = SSL.Context("sslv23")
 
         # Disable SSLv2 and SSLv3 support to avoid poodles.
-        context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
+        #context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
         # TBD: if requests verify=False is sufficient
-        if self.insecure:  # allow clients to work insecure mode if required..
-            context.post_connection_check = NoOpChecker()
-        else:
-            # Proper peer verification is essential to prevent MITM attacks.
-            context.set_verify(
-                    SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
-                    self.ssl_verify_depth)
-            if self.ca_dir is not None:
-                self._load_ca_certificates(context)
+#        if self.insecure:  # allow clients to work insecure mode if required..
+#            context.post_connection_check = NoOpChecker()
+#        else:
+#            # Proper peer verification is essential to prevent MITM attacks.
+#            context.set_verify(
+#                    SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
+#                    self.ssl_verify_depth)
+#            if self.ca_dir is not None:
+#                self._load_ca_certificates(context)
 
         #response = conn.getresponse()
         #result = {
@@ -638,7 +637,8 @@ class Restlib(object):
         """Try to catch the case where we get TLS errors because of an expired cert."""
         try:
             return self.requests_session.request(verb, full_url, data=data)
-        except SSLError:
+        # FIXME: use underlying SSL errors
+        except Exception:
             if self.cert_file:
                 id_cert = certificate.create_from_file(self.cert_file)
                 if not id_cert.is_valid():
@@ -720,6 +720,55 @@ class ClientCertRestlib(Restlib):
     def _setup_auth(self):
         self._setup_client_cert_auth()
 
+
+class EntitlementCertRestlib(Restlib):
+    ent_dir = "/etc/pki/entitlement"
+
+    def __init__(self, host, *args, **kwargs):
+        # cdn is always 443 and / handler
+        # get the proxy information from the environment variable
+        # if available
+        #info = get_env_proxy_info()
+        super(EntitlementCertRestlib, self).__init__(host, 443, '/', args, kwargs)
+
+        # TODO: plug in env proxy info
+
+    def _setup_auth(self):
+        self._setup_entitlement_cert_auth()
+
+    def _setup_entitlement_cert_auth(self):
+        self._setup_ent_certs()
+        self.requests_session.cert = (self.cert_file, self.key_file)
+
+    def _setup_server_cert_verify(self):
+        log.error("FIXME REMOVE ME FIXME REMOVE ME")
+        self.requests_session.verify = False
+
+    def _setup_ent_certs(self):
+        # FIXME: ugly
+        try:
+            for cert_file in os.listdir(self.ent_dir):
+                if cert_file.endswith(".pem") and not cert_file.endswith("-key.pem"):
+                    cert_path = os.path.join(self.ent_dir, cert_file)
+                    key_path = os.path.join(self.ent_dir, "%s-key.pem" % cert_file.split('.', 1)[0])
+                    log.debug("Loading entitlement certificate: '%s'" % cert_path)
+
+                    # This is wrong... only taking the last ent cert, which
+                    # will probably work but weird. Ideally needs to pick
+                    # out the right ent cert for the content path.
+                    self.cert_file = cert_path
+                    self.key_file = key_path
+        except OSError, e:
+            raise ConnectionSetupException(e.strerror)
+
+    def get_versions(self, path):
+        try:
+            return self.get(path)
+        except ConnectionException, e:
+            log.exception(e)
+        return ''
+
+ContentConnection = EntitlementCertRestlib
 
 # FIXME: there should probably be a class here for just
 # the connection bits, then a sub class for the api
