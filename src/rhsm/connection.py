@@ -648,10 +648,12 @@ class Restlib(object):
     # return request.Request objects
     def _requests_request(self, verb, method, data=None):
         full_url = self.full_url(method)
+        log.debug("requests_request %s", full_url)
         return self._request_wrapper(verb, full_url, data=data)
 
     # return text
     def get(self, method):
+        log.debug("get method %s", method)
         r = self._requests_request(verb='GET', method=method)
         self.validate_response(r)
         return r.text
@@ -769,6 +771,7 @@ class EntitlementCertRestlib(Restlib):
         return ''
 
 ContentConnection = EntitlementCertRestlib
+
 
 # FIXME: there should probably be a class here for just
 # the connection bits, then a sub class for the api
