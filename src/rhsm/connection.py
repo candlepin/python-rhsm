@@ -837,6 +837,9 @@ class UEPConnection:
             if config_insecure:
                 self.insecure = True
 
+        # for logging, for now, FIXME
+        self.verify = not self.insecure
+
         using_basic_auth = False
         using_id_cert_auth = False
 
@@ -873,14 +876,14 @@ class UEPConnection:
                                 proxy_user=self.proxy_user, proxy_password=self.proxy_password,
                                 ca_dir=self.ca_cert_dir, insecure=self.insecure,
                                 ssl_verify_depth=self.ssl_verify_depth)
-            auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.insecure)
+            auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
         else:
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
                     proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
                     proxy_user=self.proxy_user, proxy_password=self.proxy_password,
                     ca_dir=self.ca_cert_dir, insecure=self.insecure,
                     ssl_verify_depth=self.ssl_verify_depth)
-            auth_description = "auth=none ca_dir=%s verify=%s" % (self.ca_cert_dir, self.insecure)
+            auth_description = "auth=none ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
 
         self.resources = None
         connection_description = ""
