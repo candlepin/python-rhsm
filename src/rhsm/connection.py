@@ -390,7 +390,7 @@ class Restlib(object):
         self.proxy_user = proxy_user
         self.proxy_password = proxy_password
 
-        self.auth = auth or RhsmAuth()
+        self.auth = auth or RhsmPlainHttpsAuth()
 
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
 
@@ -420,6 +420,7 @@ class Restlib(object):
 
     # no client cert of basic auth by default, subclasses
     def _setup_auth(self):
+        log.debug("self.auth = %s", self.auth)
         self.requests_session.auth = self.auth
 
     def _setup_client_cert_auth(self):
