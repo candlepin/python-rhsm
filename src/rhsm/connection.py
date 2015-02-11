@@ -14,7 +14,6 @@
 # in this software or its documentation.
 #
 
-import base64
 import certificate
 import datetime
 import dateutil.parser
@@ -27,6 +26,7 @@ import urllib
 
 import requests
 import requests.exceptions
+import requests.auth
 
 from urllib import urlencode
 
@@ -362,7 +362,8 @@ class Restlib(object):
             proxy_hostname=None, proxy_port=None,
             proxy_user=None, proxy_password=None,
             cert_file=None, key_file=None,
-            ca_dir=None, insecure=False, ssl_verify_depth=1):
+            ca_dir=None, insecure=False, ssl_verify_depth=1,
+            auth=None):
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
@@ -388,6 +389,8 @@ class Restlib(object):
         self.proxy_port = proxy_port
         self.proxy_user = proxy_user
         self.proxy_password = proxy_password
+
+        self.auth = auth or RhsmAuth()
 
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
 
@@ -417,13 +420,10 @@ class Restlib(object):
 
     # no client cert of basic auth by default, subclasses
     def _setup_auth(self):
-        pass
+        self.requests_session.auth = self.auth
 
     def _setup_client_cert_auth(self):
         self.requests_session.cert = (self.cert_file, self.key_file)
-
-    def _setup_basic_auth(self):
-        self.requests_session.auth = requests.auth.HTTPBasicAuth(self.username, self.password)
 
     def _setup_server_cert_verify(self):
         # verify by default in base
@@ -431,22 +431,6 @@ class Restlib(object):
 
     def _setup_server_cert_no_verify(self):
         self.requests_session.verify = False
-
-    def _load_ca_certificates(self, context):
-        loaded_ca_certs = []
-        try:
-            for cert_file in os.listdir(self.ca_dir):
-                if cert_file.endswith(".pem"):
-                    cert_path = os.path.join(self.ca_dir, cert_file)
-                    res = context.load_verify_info(cert_path)
-                    loaded_ca_certs.append(cert_file)
-                    if res == 0:
-                        raise BadCertificateException(cert_path)
-        except OSError, e:
-            raise ConnectionSetupException(e.strerror)
-
-        if loaded_ca_certs:
-            log.debug("Loaded CA certificates from %s: %s" % (self.ca_dir, ', '.join(loaded_ca_certs)))
 
     def json_dumps(self, info=None):
         data = None
@@ -467,12 +451,14 @@ class Restlib(object):
         self.drift_check(response)
         self.validate_response(response)
 
+    # FIXME: should be able to move this to just per session
     def drift_check(self, response):
         # Look for server drift, and log a warning
         if drift_check(response.headers.get('date')):
             log.warn("Clock skew detected, please check your system time")
 
     def log_response(self, response):
+        log.debug("request headers %s", response.request.headers)
         log.debug("Response: status=%s requestUuid=%s",
                   response.status_code, response.headers.get('x-candepin-request-uuid') or '')
 
@@ -508,7 +494,7 @@ class Restlib(object):
     def get(self, method):
         log.debug("get method %s", method)
         r = self._requests_request(verb='GET', method=method)
-        self.validate_response(r)
+        self.check_response(r)
         return r.text
 
     # return objects
@@ -519,7 +505,7 @@ class Restlib(object):
     # returns the body of the content or raises exceptions
     def post(self, method, data=None):
         r = self._requests_request(verb='POST', method=method, data=data)
-        self.validate_response(r)
+        self.check_response(r)
         return r.text
 
     # takes in python objects and returns python objects
@@ -561,19 +547,6 @@ class Restlib(object):
         data = self.json_dumps(params)
         response_body = self.delete(method, data=data)
         return self.json_loads(response_body)
-
-
-# FIXME: switch to using Restlib with a passed in Auth type
-class BasicAuthRestlib(Restlib):
-
-    # basic auth, but no client cert auth
-    def _setup_auth(self):
-        self._setup_basic_auth()
-
-
-class ClientCertRestlib(Restlib):
-    def _setup_auth(self):
-        self._setup_client_cert_auth()
 
 
 class EntitlementCertRestlib(Restlib):
@@ -628,6 +601,40 @@ class EntitlementCertRestlib(Restlib):
         response.raise_for_status()
 
 ContentConnection = EntitlementCertRestlib
+
+
+class RhsmAuth(requests.auth.AuthBase):
+    def __call__(self, r):
+        super(RhsmAuth, self).__call__(r)
+        return r
+
+
+class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
+
+    def __call__(self, r):
+        super(RhsmBasicAuth, self).__call__(r)
+        r.headers["some-rhsm-header"] = "caneatcheese(1)=true"
+        return r
+
+
+class RhsmClientCertAuth(RhsmAuth):
+    def __init__(self, cert_file, key_file):
+        self.cert_file = cert_file
+        self.key_file = key_file
+
+    def __call__(self, r):
+        super(RhsmClientCertAuth, self).__call__(r)
+        r.cert = (self.cert_file, self.key_file)
+
+
+class RhsmPlainHttpsAuth(RhsmAuth):
+    verify = True
+
+    def __call__(self, r):
+        super(RhsmPlainHttpsAuth, self).__call__(r)
+        # default to verify
+        # verify is a 3 value boolean, True, False, or a ca_bundle path
+        r.verify = self.verify
 
 
 # FIXME: there should probably be a class here for just
@@ -715,28 +722,35 @@ class UEPConnection:
         auth_description = None
         # initialize connection
         if using_basic_auth:
-            self.conn = BasicAuthRestlib(self.host, self.ssl_port, self.handler,
+            auth = RhsmBasicAuth(self.username, self.password)
+            self.conn = Restlib(self.host, self.ssl_port, self.handler,
                     username=self.username, password=self.password,
                     proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
                     proxy_user=self.proxy_user, proxy_password=self.proxy_password,
                     ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                    ssl_verify_depth=self.ssl_verify_depth)
+                    ssl_verify_depth=self.ssl_verify_depth,
+                    auth=auth)
             auth_description = "auth=basic username=%s ca_dir=%s verify=%s" % \
                 (username, self.ca_cert_dir, self.insecure)
         elif using_id_cert_auth:
-            self.conn = ClientCertRestlib(self.host, self.ssl_port, self.handler,
+            auth = RhsmClientCertAuth(self.cert_file, self.key_file)
+            self.conn = Restlib(self.host, self.ssl_port, self.handler,
                                 cert_file=self.cert_file, key_file=self.key_file,
                                 proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
                                 proxy_user=self.proxy_user, proxy_password=self.proxy_password,
                                 ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                                ssl_verify_depth=self.ssl_verify_depth)
+                                ssl_verify_depth=self.ssl_verify_depth,
+                                auth=auth)
             auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
         else:
+            # https but no client cert and no basic auth
+            auth = RhsmPlainHttpsAuth()
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                    proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                    proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                    ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                    ssl_verify_depth=self.ssl_verify_depth)
+                                proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
+                                proxy_user=self.proxy_user, proxy_password=self.proxy_password,
+                                ca_dir=self.ca_cert_dir, insecure=self.insecure,
+                                ssl_verify_depth=self.ssl_verify_depth,
+                                auth=auth)
             auth_description = "auth=none ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
 
         self.resources = None
