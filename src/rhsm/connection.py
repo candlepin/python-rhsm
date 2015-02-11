@@ -581,7 +581,6 @@ ContentConnection = EntitlementCertRestlib
 
 class RhsmAuth(requests.auth.AuthBase):
     def __call__(self, r):
-        super(RhsmAuth, self).__call__(r)
         return r
 
 
@@ -606,6 +605,10 @@ class RhsmClientCertAuth(RhsmAuth):
 
 class RhsmEntitlementCertAuth(RhsmAuth):
     ent_dir = "/etc/pki/entitlement"
+
+    def __call__(self, r):
+        super(RhsmEntitlementCertAuth, self).__call__(r)
+        return r
 
     def _setup_ent_certs(self):
         try:
