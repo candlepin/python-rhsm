@@ -201,122 +201,10 @@ class ForbiddenException(AuthenticationException):
 class ExpiredIdentityCertException(ConnectionException):
     pass
 
+
 class ContentHTTPError(requests.exceptions.HTTPError):
+    """Http errors when making requests to content cdn"""
     pass
-
-class NoOpChecker:
-
-    def __init__(self, host=None, peerCertHash=None, peerCertDigest='sha1'):
-        self.host = host
-        self.fingerprint = peerCertHash
-        self.digest = peerCertDigest
-
-    def __call__(self, peerCert, host=None):
-        return True
-
-
-# FIXME: this is terrible, we need to refactor
-# Restlib to be Restlib based on a https client class
-class OldContentConnection(object):
-    def __init__(self, host, ssl_port=None,
-                 username=None, password=None,
-                 proxy_hostname=None, proxy_port=None,
-                 proxy_user=None, proxy_password=None,
-                 ca_dir=None, insecure=False,
-                 ssl_verify_depth=1):
-
-        log.debug("ContectConnection")
-        # FIXME
-        self.ent_dir = "/etc/pki/entitlement"
-        self.handler = "/"
-        self.ssl_verify_depth = ssl_verify_depth
-
-        self.host = host or config.get('server', 'hostname')
-        self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
-        self.ca_dir = ca_dir
-        self.insecure = insecure
-        self.username = username
-        self.password = password
-        self.ssl_verify_depth = ssl_verify_depth
-
-        self.timeout_altered = False
-
-        # get the proxy information from the environment variable
-        # if available and host is not in no_proxy
-        if urllib.proxy_bypass_environment(self.host):
-            info = {'proxy_username': '',
-                   'proxy_hostname': '',
-                   'proxy_port': '',
-                   'proxy_password': ''}
-        else:
-            info = get_env_proxy_info()
-
-        self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
-        self.proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
-        self.proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
-        self.proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
-
-    def _request(self, request_type, handler, body=None):
-        pass
-        # See note in Restlib._request
-        #context = SSL.Context("sslv23")
-
-        # Disable SSLv2 and SSLv3 support to avoid poodles.
-        #context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
-
-        #self._load_ca_certificates(context)
-
-#        if self.proxy_hostname and self.proxy_port:
-#            log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
-#            conn = RhsmProxyHTTPSConnection(self.proxy_hostname, self.proxy_port,
-#                                            username=self.proxy_user,
-#                                            password=self.proxy_password,
-#                                            ssl_context=context)
-#            # this connection class wants the full url
-#            handler = "https://%s:%s%s" % (self.host, self.ssl_port, handler)
-#        else:
-#            conn = httpslib.HTTPSConnection(self.host, safe_int(self.ssl_port), ssl_context=context)
-
-        #conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
-        #response = conn.getresponse()
-        #result = {
-        #    "content": response.read(),
-        #    "status": response.status}
-
-        #return result
-
-    def _load_ca_certificates(self, context):
-        try:
-            for cert_file in os.listdir(self.ent_dir):
-                if cert_file.endswith(".pem") and not cert_file.endswith("-key.pem"):
-                    cert_path = os.path.join(self.ent_dir, cert_file)
-                    key_path = os.path.join(self.ent_dir, "%s-key.pem" % cert_file.split('.', 1)[0])
-                    log.debug("Loading CA certificate: '%s'" % cert_path)
-
-                    #FIXME: reenable res =
-                    context.load_verify_info(cert_path)
-                    context.load_cert(cert_path, key_path)
-                    #if res == 0:
-                    #    raise BadCertificateException(cert_path)
-        except OSError, e:
-            raise ConnectionSetupException(e.strerror)
-
-    def test(self):
-        pass
-
-    def request_get(self, method):
-        return self._request("GET", method)
-
-    def get_versions(self, path):
-        handler = "%s/%s" % (self.handler, path)
-        results = self._request("GET", handler, body="")
-
-        if results['status'] == 200:
-            return results['content']
-        return ''
-
-    def _get_versions_for_product(self, product_id):
-        pass
 
 
 def _get_locale():
@@ -501,12 +389,6 @@ class Restlib(object):
         self.proxy_user = proxy_user
         self.proxy_password = proxy_password
 
-        # Setup basic authentication if specified:
-        if username and password:
-            encoded = base64.b64encode(':'.join((username, password)))
-            basic = 'Basic %s' % encoded
-            self.headers['Authorization'] = basic
-
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
 
         # We could use custom Auth types
@@ -565,40 +447,6 @@ class Restlib(object):
 
         if loaded_ca_certs:
             log.debug("Loaded CA certificates from %s: %s" % (self.ca_dir, ', '.join(loaded_ca_certs)))
-
-    # FIXME: can method be emtpty?
-    def _request(self, request_type, method, info=None):
-        pass
-        # See M2Crypto/SSL/Context.py in m2crypto source and
-        # https://www.openssl.org/docs/ssl/SSL_CTX_new.html
-        # This ends up invoking SSLv23_method, which is the catch all
-        # "be compatible" protocol, even though it explicitly is not
-        # using sslv2. This will by default potentially include sslv3
-        # if not used with post-poodle openssl. If however, the server
-        # intends to not offer sslv3, it's workable.
-        #
-        # So this supports tls1.2, 1.1, 1.0, and/or sslv3 if supported.
-        #context = SSL.Context("sslv23")
-
-        # Disable SSLv2 and SSLv3 support to avoid poodles.
-        #context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
-
-        # TBD: if requests verify=False is sufficient
-#        if self.insecure:  # allow clients to work insecure mode if required..
-#            context.post_connection_check = NoOpChecker()
-#        else:
-#            # Proper peer verification is essential to prevent MITM attacks.
-#            context.set_verify(
-#                    SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
-#                    self.ssl_verify_depth)
-#            if self.ca_dir is not None:
-#                self._load_ca_certificates(context)
-
-        #response = conn.getresponse()
-        #result = {
-        #    "content": response.read(),
-        #    "status": response.status,
-        #}
 
     def json_dumps(self, info=None):
         data = None
@@ -820,14 +668,8 @@ class UEPConnection:
         self.handler = self.handler.rstrip("/")
 
         # get the proxy information from the environment variable
-        # if available and host is not in no_proxy
-        if urllib.proxy_bypass_environment(self.host):
-            info = {'proxy_username': '',
-                   'proxy_hostname': '',
-                   'proxy_port': '',
-                   'proxy_password': ''}
-        else:
-            info = get_env_proxy_info()
+        # if available
+        info = get_env_proxy_info()
 
         self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
         self.proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
