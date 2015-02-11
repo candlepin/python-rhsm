@@ -378,8 +378,8 @@ class RhsmResponseValidator(object):
             return json.loads(response.text,
                               object_hook=self.json_decoder)
         except ValueError, e:
-            log.error("Response: %s" % response.status_code)
-            log.error("JSON parsing error: %s" % e)
+            log.info("Response: %s" % response.status_code)
+            log.info("JSON parsing error: %s" % e)
         except Exception, e:
             log.error("Response: %s" % response.status_code)
             log.exception(e)
@@ -396,8 +396,11 @@ class RhsmResponseValidator(object):
         if response.text:
             parsed_response = self.try_to_parse(response)
 
+        # A better replacement would be to use the
+        # request.Request.raise_for_status() and
+        # map
         if not parsed_response:
-            self.raise_exception_based_on_status_code(response)
+            self.raise_exception_based_on_just_status_code(response)
             return
 
         # see if we have been deleted and hit a 410
@@ -425,7 +428,7 @@ class RhsmResponseValidator(object):
                                 parsed_response['displayMessage'],
                                 parsed_response['deletedId'])
 
-    def raise_exception_based_on_status_code(self, response):
+    def raise_exception_based_on_just_status_code(self, response):
         # This really needs an exception mapper too...
         status_code = response.status_code
         request_type = response.request.method
@@ -769,6 +772,9 @@ class EntitlementCertRestlib(Restlib):
         except ConnectionException, e:
             log.exception(e)
         return ''
+
+    def validate_response(self, response):
+        response.raise_for_status()
 
 ContentConnection = EntitlementCertRestlib
 
