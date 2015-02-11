@@ -773,8 +773,7 @@ class EntitlementCertRestlib(Restlib):
             return self.get(path)
         except requests.exceptions.HTTPError, e:
             log.debug(e)
-            log.debug(dir(e))
-            log.exception(e)
+            log.debug("Error getting listing from %s", e.response.request.url)
         return ''
 
     def validate_response(self, response):
