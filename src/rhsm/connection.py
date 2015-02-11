@@ -26,6 +26,7 @@ import sys
 import urllib
 
 import requests
+import requests.exceptions
 
 from urllib import urlencode
 
@@ -198,9 +199,10 @@ class ForbiddenException(AuthenticationException):
 
 
 class ExpiredIdentityCertException(ConnectionException):
-
     pass
 
+class ContentHTTPError(requests.exceptions.HTTPError):
+    pass
 
 class NoOpChecker:
 
@@ -769,7 +771,9 @@ class EntitlementCertRestlib(Restlib):
     def get_versions(self, path):
         try:
             return self.get(path)
-        except ConnectionException, e:
+        except requests.exceptions.HTTPError, e:
+            log.debug(e)
+            log.debug(dir(e))
             log.exception(e)
         return ''
 
