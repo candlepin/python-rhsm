@@ -561,33 +561,9 @@ class EntitlementCertRestlib(Restlib):
 
         # TODO: plug in env proxy info
 
-    def _setup_auth(self):
-        self._setup_entitlement_cert_auth()
-
-    def _setup_entitlement_cert_auth(self):
-        self._setup_ent_certs()
-        self.requests_session.cert = (self.cert_file, self.key_file)
-
     def _setup_server_cert_verify(self):
         log.error("FIXME REMOVE ME FIXME REMOVE ME")
         self.requests_session.verify = False
-
-    def _setup_ent_certs(self):
-        # FIXME: ugly
-        try:
-            for cert_file in os.listdir(self.ent_dir):
-                if cert_file.endswith(".pem") and not cert_file.endswith("-key.pem"):
-                    cert_path = os.path.join(self.ent_dir, cert_file)
-                    key_path = os.path.join(self.ent_dir, "%s-key.pem" % cert_file.split('.', 1)[0])
-                    log.debug("Loading entitlement certificate: '%s'" % cert_path)
-
-                    # This is wrong... only taking the last ent cert, which
-                    # will probably work but weird. Ideally needs to pick
-                    # out the right ent cert for the content path.
-                    self.cert_file = cert_path
-                    self.key_file = key_path
-        except OSError, e:
-            raise ConnectionSetupException(e.strerror)
 
     def get_versions(self, path):
         try:
@@ -625,6 +601,42 @@ class RhsmClientCertAuth(RhsmAuth):
     def __call__(self, r):
         super(RhsmClientCertAuth, self).__call__(r)
         r.cert = (self.cert_file, self.key_file)
+
+
+class RhsmEntitlementCertAuth(RhsmAuth):
+    ent_dir = "/etc/pki/entitlement"
+
+    def _setup_ent_certs(self):
+        try:
+            cert_key_paths = self._find_cert_key_paths()
+
+            cert_key_path = self._pick_one(cert_key_paths)
+
+            self.cert_file = cert_key_path[0]
+            self.key_path = cert_key_path[1]
+        except OSError, e:
+            raise ConnectionSetupException(e.strerror)
+
+    def _find_cert_key_paths(self):
+        cert_dir_files = os.listdir(self.ent_dir)
+        cert_files = [x for x in cert_dir_files if self._cert_mach(x)]
+
+        return [self._cert_key_paths(y) for y in cert_files]
+
+    def _cert_key_paths(self, cert_file):
+        cert_path = os.path.join(self.ent_dir, cert_file)
+        key_path = os.path.join(self.ent_dir, "%s-key.pem" % cert_file.split('.', 1)[0])
+        return (cert_path, key_path)
+
+    # we have many potential ent certs. Pick one.
+    # For now, the first one. But it should learn to pick the right
+    # one for the url.
+    # FIXME
+    def _pick_one(self, cert_key_paths):
+        return cert_key_paths[0]
+
+    def _cert_match(self, cert_file):
+        return cert_file.endswith(".pem") and not cert_file.endswith("-key.pem")
 
 
 class RhsmPlainHttpsAuth(RhsmAuth):
