@@ -390,18 +390,30 @@ class Restlib(object):
         self.proxy_user = proxy_user
         self.proxy_password = proxy_password
 
+        log.debug("Restlib init auth=%s", auth)
         self.auth = auth or RhsmPlainHttpsAuth()
+        log.debug("self.auth %s auth %s", self.auth, auth)
 
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
 
-        # We could use custom Auth types
         # We could set connect and read timeouts
+        # we could setup response hooks for caching
+
+        self.requests_session_factory()
+
+    def requests_session_factory(self,
+                                 auth=None,
+                                 server_cert_info=None,
+                                 client_cert_info=None,
+                                 proxy_info=None):
         self._setup_session()
         self._setup_proxy()
         self._setup_server_cert_verify()
-        if self.insecure:
-            self._setup_server_cert_no_verify()
+        self._setup_client_cert_auth()
         self._setup_auth()
+        # Use an HttpAdaptor and overrides it's cert_verify
+        #  ... then we could map specific url subpaths to different auth setups
+        #      ie, /consumers is consumer cert while and /status are Plain https
 
     def _setup_proxy(self):
         if self.proxy_hostname and self.proxy_port:
@@ -424,14 +436,16 @@ class Restlib(object):
         self.requests_session.auth = self.auth
 
     def _setup_client_cert_auth(self):
-        self.requests_session.cert = (self.cert_file, self.key_file)
+        if self.cert_file and self.key_file:
+            self.requests_session.cert = (self.auth.cert_file,
+                                          self.auth.key_file)
 
     def _setup_server_cert_verify(self):
         # verify by default in base
-        self.requests_session.verify = os.path.join(self.ca_dir, 'ca_bundle.pem')
-
-    def _setup_server_cert_no_verify(self):
-        self.requests_session.verify = False
+        if self.insecure:
+            self.requests_session.verify = False
+        else:
+            self.requests_session.verify = os.path.join(self.ca_dir, 'ca_bundle.pem')
 
     def json_dumps(self, info=None):
         data = None
@@ -519,7 +533,7 @@ class Restlib(object):
     # returns the body of the content or raises exceptions
     def put(self, method, data=None):
         r = self._requests_request(verb='PUT', method=method, data=data)
-        self.validate_response(r)
+        self.check_response(r)
         return r.text
 
     # takes in python objects and returns python objects
@@ -532,7 +546,7 @@ class Restlib(object):
     # return text
     def head(self, method):
         r = self._requests_request(verb='HEAD', method=method)
-        self.validate_response(r)
+        self.check_response(r)
         return r.text
 
     def request_head(self, method):
@@ -541,7 +555,7 @@ class Restlib(object):
 
     def delete(self, method, data=None):
         r = self._requests_request(verb='DELETE', method=method, data=data)
-        self.validate_response(r)
+        self.check_response(r)
         return r.text
 
     def request_delete(self, method, params=None):
@@ -581,11 +595,18 @@ ContentConnection = EntitlementCertRestlib
 
 
 class RhsmAuth(requests.auth.AuthBase):
+    def __init__(self):
+        self.log = logging.getLogger("%s.%s" % (__name__, type(self).__name__))
+
     def __call__(self, r):
+        self.log.debug("base_auth %s", r)
         return r
 
 
 class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
+    def __init__(self, username, password):
+        super(RhsmBasicAuth, self).__init__(username, password)
+        self.log = logging.getLogger(type(self).__name__)
 
     def __call__(self, r):
         super(RhsmBasicAuth, self).__call__(r)
@@ -594,13 +615,17 @@ class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
 
 
 class RhsmClientCertAuth(RhsmAuth):
+    has_client_cert = True
+
     def __init__(self, cert_file, key_file):
+        super(RhsmClientCertAuth, self).__init__()
         self.cert_file = cert_file
         self.key_file = key_file
 
     def __call__(self, r):
         super(RhsmClientCertAuth, self).__call__(r)
         r.cert = (self.cert_file, self.key_file)
+        self.log.debug("client cert auth %s %s", self.cert_file, self.key_file)
         return r
 
 
@@ -652,6 +677,7 @@ class RhsmPlainHttpsAuth(RhsmAuth):
         # default to verify
         # verify is a 3 value boolean, True, False, or a ca_bundle path
         r.verify = self.verify
+        return r
 
 
 # FIXME: there should probably be a class here for just
