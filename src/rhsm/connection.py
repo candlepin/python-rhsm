@@ -369,10 +369,12 @@ class ProxyInfo(object):
         if self.auth_slug:
             self.auth_slug += '@'
 
-        self.url = "%s%s%s:%s/" % (self.scheme,
-                                   self.auth_slug or '',
-                                   self.hostname,
-                                   self.port)
+        if self.hostname and self.port:
+            self.url = "%s%s%s:%s/" % (self.scheme,
+                                       self.auth_slug or '',
+                                       self.hostname,
+                                       self.port)
+        log.debug("proxy_info.url=%s", self.url)
         self.scheme_map = {'https': self.url,
                            'http': self.url}
 
@@ -412,8 +414,8 @@ class RequestsSessionFactory(object):
                 client_cert_info=None, proxy_info=None):
 
         session = self.create_session()
-        session = self.setup_proxy(session, proxy_info)
-        session = self.setup_server_cert_verify(session, server_cert_info)
+#        session = self.setup_proxy(session, proxy_info)
+#        session = self.setup_server_cert_verify(session, server_cert_info)
         session = self.setup_client_cert_auth(session, client_cert_info)
         session = self.setup_auth(session, auth)
         # Use an HttpAdaptor and overrides it's cert_verify
@@ -427,8 +429,11 @@ class RequestsSessionFactory(object):
     def setup_proxy(self, session, proxy_info):
         if not proxy_info:
             return session
+        if not proxy_info.url:
+            return session
 
         session.proxy = proxy_info.scheme_map
+        log.debug("session.proxy=%s", session.proxy)
         return session
 
     def setup_auth(self, session, auth):
@@ -441,6 +446,7 @@ class RequestsSessionFactory(object):
             return session
 
         session.cert = client_cert_info.cert_pair
+        log.debug("session.cert=%s", session.cert)
         return session
 
     def setup_server_cert_verify(self, session, server_cert_info):
@@ -453,12 +459,15 @@ class RequestsSessionFactory(object):
         else:
             session.verify = server_cert_info.ca_bundle
 
+        session.verify=False
         # verify depth
-
+        log.debug("session=%s verify=%s", session, session.verify)
         return session
+
 
 class RhsmHTTPAdapter(requests.adapters.HTTPAdapter):
     pass
+
 
 # FIXME: it would be nice if the ssl server connection stuff
 # was decomposed from the api handling parts
@@ -503,6 +512,8 @@ class Restlib(object):
                                               proxy_info=self.proxy_info)
 
         self.session = self.session_factory.session
+        log.debug("self.base_url=%s", self.base_url)
+        log.debug("self.session %s", self.session)
     # restlib should be api info, requestsSession connection info
     # give restlib a host/port and a requestsSession, and UepConnection can
     # assemble those
@@ -550,9 +561,14 @@ class Restlib(object):
     def _request_wrapper(self, verb, full_url, data=None):
         """Try to catch the case where we get TLS errors because of an expired cert."""
         try:
-            return self.session.request(verb, full_url, data=data)
+            log.debug("self.session=%s", self.session)
+            log.debug("self.session.request=%s %s", self.session.request, dir(self.session.request))
+            request = self.session.request(verb, full_url, data=data)
+            log.debug("wrapper ession=%s dir=%s", request, dir(request))
+            return request
         # FIXME: use underlying SSL errors
-        except Exception:
+        except Exception, e:
+            log.debug(e)
             if self.client_cert_info:
                 self.client_cert_info.validate_cert()
             raise
@@ -832,6 +848,8 @@ class UEPConnection:
         if self.proxy_hostname and self.proxy_port:
             proxy_description = "http_proxy=%s:%s " % (self.proxy_hostname, self.proxy_port)
         auth_description = None
+
+        log.debug("using_basic_auth=%s using_id_cert_auth=%s", using_basic_auth, using_id_cert_auth)
         # initialize connection
         if using_basic_auth:
             auth = RhsmBasicAuth(self.username, self.password)
@@ -851,6 +869,7 @@ class UEPConnection:
 
             auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
         else:
+            log.debug("plain https auth")
             # https but no client cert and no basic auth
             auth = RhsmPlainHttpsAuth()
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
