@@ -26,7 +26,10 @@ import urllib
 
 import requests
 import requests.exceptions
+import requests.adapters
 import requests.auth
+from requests.packages.urllib3.poolmanager import PoolManager
+
 
 from urllib import urlencode
 
@@ -416,12 +419,13 @@ class RequestsSessionFactory(object):
         session = self.create_session()
 #        session = self.setup_proxy(session, proxy_info)
 #        session = self.setup_server_cert_verify(session, server_cert_info)
-        session = self.setup_client_cert_auth(session, client_cert_info)
+#        session = self.setup_client_cert_auth(session, client_cert_info)
         session = self.setup_auth(session, auth)
         # Use an HttpAdaptor and overrides it's cert_verify
         #  ... then we could map specific url subpaths to different auth setups
         #      ie, /consumers is consumer cert while and /status are Plain https
         self.session = session
+        log.debug("session %s", session)
 
     def create_session(self):
         return requests.Session()
@@ -459,7 +463,6 @@ class RequestsSessionFactory(object):
         else:
             session.verify = server_cert_info.ca_bundle
 
-        session.verify=False
         # verify depth
         log.debug("session=%s verify=%s", session, session.verify)
         return session
@@ -467,6 +470,17 @@ class RequestsSessionFactory(object):
 
 class RhsmHTTPAdapter(requests.adapters.HTTPAdapter):
     pass
+
+
+import ssl
+
+
+class MyAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = PoolManager(num_pools=connections,
+                                       maxsize=maxsize,
+                                       block=block,
+                                       ssl_version=ssl.PROTOCOL_TLSv1)
 
 
 # FIXME: it would be nice if the ssl server connection stuff
@@ -501,17 +515,29 @@ class Restlib(object):
         self.auth = auth or RhsmPlainHttpsAuth()
         log.debug("self.auth %s auth %s", self.auth, auth)
 
+        #self.host = "grimlock.usersys.redhat.com"
+        #self.ssl_port = 443
+        #self.apihandler = "/candlepin"
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
+        log.debug("bu1 %s", self.base_url)
+        self.host = "grimlock.usersys.redhat.com"
+        self.ssl_port = 8443
+        self.apihandler = "/candlepin"
+        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
+        log.debug("bu %s",self.base_url)
 
         # We could set connect and read timeouts
         # we could setup response hooks for caching
 
-        self.session_factory = RequestsSessionFactory(auth=self.auth,
-                                              server_cert_info=self.server_cert_info,
-                                              client_cert_info=self.client_cert_info,
-                                              proxy_info=self.proxy_info)
+#        self.session_factory = RequestsSessionFactory(auth=self.auth,
+#                                              server_cert_info=self.server_cert_info,
+#                                              client_cert_info=self.client_cert_info,
+#                                              proxy_info=self.proxy_info)
 
-        self.session = self.session_factory.session
+        self.session = requests.Session()
+        self.session.verify = False
+        self.session.mount('https://', MyAdapter())
+        #self.session = self.session_factory.session
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
     # restlib should be api info, requestsSession connection info
@@ -562,6 +588,7 @@ class Restlib(object):
         """Try to catch the case where we get TLS errors because of an expired cert."""
         try:
             log.debug("self.session=%s", self.session)
+            log.debug("full_url=%s verb=%s", full_url, verb)
             log.debug("self.session.request=%s %s", self.session.request, dir(self.session.request))
             request = self.session.request(verb, full_url, data=data)
             log.debug("wrapper ession=%s dir=%s", request, dir(request))
@@ -582,12 +609,14 @@ class Restlib(object):
     # return text
     def get(self, method):
         log.debug("get method %s", method)
-        r = self._requests_request(verb='GET', method=method)
+        #r = self._requests_request(verb='GET', method=method)
+        r = self.session.get(self.full_url(method))
         self.check_response(r)
         return r.text
 
     # return objects
     def request_get(self, method):
+        log.debug("request_get=%s", method)
         response_body = self.get(method)
         return self.json_loads(response_body)
 
@@ -802,7 +831,6 @@ class UEPConnection:
         self.proxy_info = ProxyInfo(self.proxy_hostname, self.proxy_port,
                                     self.proxy_user, self.proxy_password)
 
-
         self.cert_file = cert_file
         self.key_file = key_file
         self.client_cert_info = ClientCertInfo(self.cert_file, self.key_file)
@@ -829,6 +857,7 @@ class UEPConnection:
                                                self.verify,
                                                self.ssl_verify_depth)
 
+        log.debug("self.ca_bundle=%s", self.ca_bundle)
         using_basic_auth = False
         using_id_cert_auth = False
 
