@@ -373,8 +373,8 @@ class ProxyInfo(object):
                                    self.auth_slug or '',
                                    self.hostname,
                                    self.port)
-        self.scheme_map = {'https': self.proxy_url,
-                           'http': self.proxy_url}
+        self.scheme_map = {'https': self.url,
+                           'http': self.url}
 
 
 class ClientCertInfo(object):
@@ -385,6 +385,11 @@ class ClientCertInfo(object):
         self.cert_pair = (self.cert_file,
                           self.key_file)
 
+    def validate_cert(self):
+        id_cert = certificate.create_from_file(self.cert_file)
+        if not id_cert.is_valid():
+            raise ExpiredIdentityCertException()
+
 
 class ServerCertInfo(object):
     def __init__(self, ca_bundle, ca_dir=None, verify=True, verify_depth=None):
@@ -393,7 +398,6 @@ class ServerCertInfo(object):
         self.verify = verify
         # 3?
         self.verify_depth = verify_depth or 3
-
 
 
 class RequestsSessionFactory(object):
@@ -415,6 +419,7 @@ class RequestsSessionFactory(object):
         # Use an HttpAdaptor and overrides it's cert_verify
         #  ... then we could map specific url subpaths to different auth setups
         #      ie, /consumers is consumer cert while and /status are Plain https
+        self.session = session
 
     def create_session(self):
         return requests.Session()
@@ -452,6 +457,8 @@ class RequestsSessionFactory(object):
 
         return session
 
+class RhsmHTTPAdapter(requests.adapters.HTTPAdapter):
+    pass
 
 # FIXME: it would be nice if the ssl server connection stuff
 # was decomposed from the api handling parts
@@ -460,15 +467,17 @@ class Restlib(object):
      A wrapper around httplib to make rest calls easier
     """
     def __init__(self, host, ssl_port, apihandler,
-            username=None, password=None,
-            proxy_hostname=None, proxy_port=None,
-            proxy_user=None, proxy_password=None,
-            cert_file=None, key_file=None,
-            ca_dir=None, insecure=False, ssl_verify_depth=1,
-            auth=None):
+                 auth=None,
+                 server_cert_info=None,
+                 client_cert_info=None,
+                 proxy_info=None):
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
+        self.server_cert_info = server_cert_info
+        self.client_cert_info = client_cert_info
+        self.proxy_info = proxy_info
+
         lc = _get_locale()
 
         self.headers = {"Content-type": "application/json",
@@ -479,19 +488,6 @@ class Restlib(object):
         if lc:
             self.headers["Accept-Language"] = lc.lower().replace('_', '-')
 
-        # FIXME: pass in an Auth object instead
-        self.cert_file = cert_file
-        self.key_file = key_file
-        self.ca_dir = ca_dir
-        self.insecure = insecure
-        self.username = username
-        self.password = password
-        self.ssl_verify_depth = ssl_verify_depth
-        self.proxy_hostname = proxy_hostname
-        self.proxy_port = proxy_port
-        self.proxy_user = proxy_user
-        self.proxy_password = proxy_password
-
         log.debug("Restlib init auth=%s", auth)
         self.auth = auth or RhsmPlainHttpsAuth()
         log.debug("self.auth %s auth %s", self.auth, auth)
@@ -501,8 +497,12 @@ class Restlib(object):
         # We could set connect and read timeouts
         # we could setup response hooks for caching
 
-        self.requests_session_factory()
+        self.session_factory = RequestsSessionFactory(auth=self.auth,
+                                              server_cert_info=self.server_cert_info,
+                                              client_cert_info=self.client_cert_info,
+                                              proxy_info=self.proxy_info)
 
+        self.session = self.session_factory.session
     # restlib should be api info, requestsSession connection info
     # give restlib a host/port and a requestsSession, and UepConnection can
     # assemble those
@@ -550,13 +550,11 @@ class Restlib(object):
     def _request_wrapper(self, verb, full_url, data=None):
         """Try to catch the case where we get TLS errors because of an expired cert."""
         try:
-            return self.requests_session.request(verb, full_url, data=data)
+            return self.session.request(verb, full_url, data=data)
         # FIXME: use underlying SSL errors
         except Exception:
-            if self.cert_file:
-                id_cert = certificate.create_from_file(self.cert_file)
-                if not id_cert.is_valid():
-                    raise ExpiredIdentityCertException()
+            if self.client_cert_info:
+                self.client_cert_info.validate_cert()
             raise
 
     # return request.Request objects
@@ -810,9 +808,10 @@ class UEPConnection:
         # for logging, for now, FIXME
         self.verify = not self.insecure
 
-        self.server_cert_info = ServerCertInfo.from_ca_dir(self.ca_cert_dir,
-                                                           self.verify,
-                                                           self.verify_depth)
+        self.ca_bundle = os.path.join(self.ca_cert_dir, 'ca_bundle.pem')
+        self.server_cert_info = ServerCertInfo(self.ca_bundle,
+                                               self.verify,
+                                               self.ssl_verify_depth)
 
         using_basic_auth = False
         using_id_cert_auth = False
@@ -837,33 +836,27 @@ class UEPConnection:
         if using_basic_auth:
             auth = RhsmBasicAuth(self.username, self.password)
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                    username=self.username, password=self.password,
-                    proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                    proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                    ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                    ssl_verify_depth=self.ssl_verify_depth,
-                    auth=auth)
+                                auth=auth,
+                                server_cert_info=self.server_cert_info,
+                                proxy_info=self.proxy_info)
             auth_description = "auth=basic username=%s ca_dir=%s verify=%s" % \
                 (username, self.ca_cert_dir, self.insecure)
         elif using_id_cert_auth:
             auth = RhsmClientCertAuth(self.cert_file, self.key_file)
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                                cert_file=self.cert_file, key_file=self.key_file,
-                                proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                                proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                                ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                                ssl_verify_depth=self.ssl_verify_depth,
-                                auth=auth)
+                                auth=auth,
+                                server_cert_info=self.server_cert_info,
+                                client_cert_info=self.client_cert_info,
+                                proxy_info=self.proxy_info)
+
             auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
         else:
             # https but no client cert and no basic auth
             auth = RhsmPlainHttpsAuth()
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                                proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                                proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                                ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                                ssl_verify_depth=self.ssl_verify_depth,
-                                auth=auth)
+                                auth=auth,
+                                server_cert_info=self.server_cert_info,
+                                proxy_info=self.proxy_info)
             auth_description = "auth=none ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
 
         self.resources = None
