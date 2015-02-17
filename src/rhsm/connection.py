@@ -220,6 +220,28 @@ class RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
         return msg
 
 
+# from old smolt code...
+def reset_resolver():
+    '''Attempt to reset the system hostname resolver.
+    returns 0 on success, or -1 if an error occurs.'''
+    try:
+        import ctypes
+        try:
+            resolv = ctypes.CDLL("libc.so.6")
+            r = resolv.__res_init()
+        except (OSError, AttributeError):
+            log.warn("could not find __res_init in libc.so.6")
+            r = -1
+        return r
+    except ImportError:
+        # If ctypes isn't supported (older versions of python for example)
+        # Then just don't do anything
+        pass
+    except Exception, e:
+        log.warning("reset_resolver failed: %s", e)
+        pass
+
+
 # FIXME: this is terrible, we need to refactor
 # Restlib to be Restlib based on a https client class
 class ContentConnection(object):
@@ -273,7 +295,16 @@ class ContentConnection(object):
         else:
             conn = httpslib.HTTPSConnection(self.host, safe_int(self.ssl_port), ssl_context=context)
 
-        conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
+        try:
+            conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
+        except socket.gaierror:
+            # errno -2, name or service not known
+            # possibly cause by getaddrinfo caching negative results
+            # ala https://sourceware.org/bugzilla/show_bug.cgi?id=3675
+            # so call reset_resolver to call res_init and try again
+            reset_resolver()
+            conn.request("GET", handler, body="", headers={"Host": "%s:%s" % (self.host, self.ssl_port), "Content-Length": "0"})
+
         response = conn.getresponse()
         result = {
             "content": response.read(),
@@ -468,6 +499,9 @@ class Restlib(object):
             body = None
 
         log.debug("Making request: %s %s" % (request_type, handler))
+
+        # force reloading of resolv.conf etc
+        reset_resolver()
 
         headers = self.headers
         if body is None:
