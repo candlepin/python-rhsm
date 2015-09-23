@@ -875,7 +875,7 @@ class UEPConnection:
 
         return self.conn.request_post(url, params)
 
-    def hypervisorCheckIn(self, owner, env, host_guest_mapping):
+    def hypervisorCheckIn(self, owner, env, host_guest_mapping, reporter_id=None):
         """
         Sends a mapping of hostIds to list of guestIds to candlepin
         to be registered/updated.
@@ -887,10 +887,14 @@ class UEPConnection:
             'host-id-2': ['guest-id-3', 'guest-id-4']
         }
         """
+        if not reporter_id:
+            reporter_id = ""
         if (self.has_capability("hypervisors_async")):
             priorContentType = self.conn.headers['Content-type']
             self.conn.headers['Content-type'] = 'text/plain'
-            query_params = urlencode({"env": env, "cloaked": False})
+            query_params = urlencode({"env": env,
+                                      "cloaked": False,
+                                      "reporter_id": reporter_id})
             url = "/hypervisors/%s?%s" % (owner, query_params)
             res = self.conn.request_post(url, host_guest_mapping)
             self.conn.headers['Content-type'] = priorContentType
