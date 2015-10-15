@@ -66,8 +66,8 @@ rm -rf %{buildroot}
 %doc README
 
 %dir %{python_sitearch}/rhsm
-%attr(755,root,root) %dir %{_sysconfdir}/rhsm
-%attr(755,root,root) %dir %{_sysconfdir}/rhsm/ca
+%attr(0775,rhsm,rhsm) %dir %{_sysconfdir}/rhsm
+%attr(0755,rhsm,rhsm) %dir %{_sysconfdir}/rhsm/ca
 
 %{python_sitearch}/rhsm/*
 %{python_sitearch}/rhsm-*.egg-info
