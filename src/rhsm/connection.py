@@ -14,7 +14,6 @@
 # in this software or its documentation.
 #
 
-import base64
 import certificate
 import datetime
 import dateutil.parser
@@ -22,12 +21,16 @@ import locale
 import logging
 import os
 import socket
+import ssl
 import sys
 import urllib
 
-from M2Crypto import SSL, httpslib
-from M2Crypto.SSL import SSLError
-from M2Crypto import m2
+import requests
+import requests.exceptions
+import requests.adapters
+import requests.auth
+from requests.packages.urllib3.poolmanager import PoolManager
+
 
 from urllib import urlencode
 
@@ -43,7 +46,7 @@ except ImportError:
     subman_version = "unknown"
 
 from rhsm import ourjson as json
-from rhsm import utils
+from rhsm.utils import get_env_proxy_info
 
 global_socket_timeout = 60
 timeout_altered = None
@@ -141,10 +144,9 @@ class RestlibException(ConnectionException):
     See RestLib.validateResponse to see when this and other exceptions are raised.
     """
 
-    def __init__(self, code, msg=None, headers=None):
+    def __init__(self, code, msg=None):
         self.code = code
         self.msg = msg or ""
-        self.headers = headers or {}
 
     def __str__(self):
         return self.msg
@@ -244,158 +246,12 @@ class ForbiddenException(AuthenticationException):
 
 
 class ExpiredIdentityCertException(ConnectionException):
-
     pass
 
 
-class NoOpChecker:
-
-    def __init__(self, host=None, peerCertHash=None, peerCertDigest='sha1'):
-        self.host = host
-        self.fingerprint = peerCertHash
-        self.digest = peerCertDigest
-
-    def __call__(self, peerCert, host=None):
-        return True
-
-
-class RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
-    # 2.7 httplib expects to be able to pass a body argument to
-    # endheaders, which the m2crypto.httpslib.ProxyHTTPSConnect does
-    # not support
-    def endheaders(self, body=None):
-        if not self._proxy_auth:
-            self._proxy_auth = self._encode_auth()
-
-        if body:
-            httpslib.HTTPSConnection.endheaders(self, body)
-        else:
-            httpslib.HTTPSConnection.endheaders(self)
-
-    def _get_connect_msg(self):
-        """ Return an HTTP CONNECT request to send to the proxy. """
-        port = safe_int(self._real_port)
-        msg = "CONNECT %s:%d HTTP/1.1\r\n" % (self._real_host, port)
-        msg = msg + "Host: %s:%d\r\n" % (self._real_host, port)
-        if self._proxy_UA:
-            msg = msg + "%s: %s\r\n" % (self._UA_HEADER, self._proxy_UA)
-        if self._proxy_auth:
-            msg = msg + "%s: %s\r\n" % (self._AUTH_HEADER, self._proxy_auth)
-        msg = msg + "\r\n"
-        return msg
-
-
-# FIXME: this is terrible, we need to refactor
-# Restlib to be Restlib based on a https client class
-class ContentConnection(object):
-    def __init__(self, host, ssl_port=None,
-                 username=None, password=None,
-                 proxy_hostname=None, proxy_port=None,
-                 proxy_user=None, proxy_password=None,
-                 ca_dir=None, insecure=False,
-                 ssl_verify_depth=1):
-
-        log.debug("ContectConnection")
-        # FIXME
-        self.ent_dir = "/etc/pki/entitlement"
-        self.handler = "/"
-        self.ssl_verify_depth = ssl_verify_depth
-
-        self.host = host or config.get('server', 'hostname')
-        self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
-        self.ca_dir = ca_dir
-        self.insecure = insecure
-        self.username = username
-        self.password = password
-        self.ssl_verify_depth = ssl_verify_depth
-        self.timeout_altered = False
-
-        # get the proxy information from the environment variable
-        # if available and host is not in no_proxy
-        if urllib.proxy_bypass_environment(self.host):
-            info = {'proxy_username': '',
-                   'proxy_hostname': '',
-                   'proxy_port': '',
-                   'proxy_password': ''}
-        else:
-            info = utils.get_env_proxy_info()
-
-        self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
-        self.proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
-        self.proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
-        self.proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
-
-    @property
-    def user_agent(self):
-        return "RHSM-content/1.0 (cmd=%s)" % utils.cmd_name(sys.argv)
-
-    def _request(self, request_type, handler, body=None):
-        # See note in Restlib._request
-        context = SSL.Context("sslv23")
-
-        # Disable SSLv2 and SSLv3 support to avoid poodles.
-        context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
-
-        self._load_ca_certificates(context)
-
-        if self.proxy_hostname and self.proxy_port:
-            log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
-            conn = RhsmProxyHTTPSConnection(self.proxy_hostname, self.proxy_port,
-                                            username=self.proxy_user,
-                                            password=self.proxy_password,
-                                            ssl_context=context)
-            # this connection class wants the full url
-            handler = "https://%s:%s%s" % (self.host, self.ssl_port, handler)
-        else:
-            conn = httpslib.HTTPSConnection(self.host, safe_int(self.ssl_port), ssl_context=context)
-
-        set_default_socket_timeout_if_python_2_3()
-
-        conn.request("GET", handler,
-                     body="",
-                     headers={"Host": "%s:%s" % (self.host, self.ssl_port),
-                              "Content-Length": "0",
-                              "User-Agent": self.user_agent})
-        response = conn.getresponse()
-        result = {
-            "content": response.read(),
-            "status": response.status,
-            "headers": dict(response.getheaders())}
-
-        return result
-
-    def _load_ca_certificates(self, context):
-        try:
-            for cert_file in os.listdir(self.ent_dir):
-                if cert_file.endswith(".pem") and not cert_file.endswith("-key.pem"):
-                    cert_path = os.path.join(self.ent_dir, cert_file)
-                    key_path = os.path.join(self.ent_dir, "%s-key.pem" % cert_file.split('.', 1)[0])
-                    log.debug("Loading CA certificate: '%s'" % cert_path)
-
-                    #FIXME: reenable res =
-                    context.load_verify_info(cert_path)
-                    context.load_cert(cert_path, key_path)
-                    #if res == 0:
-                    #    raise BadCertificateException(cert_path)
-        except OSError, e:
-            raise ConnectionSetupException(e.strerror)
-
-    def test(self):
-        pass
-
-    def request_get(self, method):
-        return self._request("GET", method)
-
-    def get_versions(self, path):
-        handler = "%s/%s" % (self.handler, path)
-        results = self._request("GET", handler, body="")
-
-        if results['status'] == 200:
-            return results['content']
-        return ''
-
-    def _get_versions_for_product(self, product_id):
-        pass
+class ContentHTTPError(requests.exceptions.HTTPError):
+    """Http errors when making requests to content cdn"""
+    pass
 
 
 def _get_locale():
@@ -418,67 +274,22 @@ def _get_locale():
     return None
 
 
-# FIXME: it would be nice if the ssl server connection stuff
-# was decomposed from the api handling parts
-class Restlib(object):
-    """
-     A wrapper around httplib to make rest calls easier
-     See validateResponse() to learn when exceptions are raised as a result
-     of communication with the server.
-    """
-    def __init__(self, host, ssl_port, apihandler,
-            username=None, password=None,
-            proxy_hostname=None, proxy_port=None,
-            proxy_user=None, proxy_password=None,
-            cert_file=None, key_file=None,
-            ca_dir=None, insecure=False, ssl_verify_depth=1):
-        self.host = host
-        self.ssl_port = ssl_port
-        self.apihandler = apihandler
-        lc = _get_locale()
-
-        # Default, updated by UepConnection
-        self.user_agent = "python-rhsm-user-agent"
-
-        self.headers = {"Content-type": "application/json",
-                        "Accept": "application/json",
-                        "x-python-rhsm-version": python_rhsm_version,
-                        "x-subscription-manager-version": subman_version}
-
-        if lc:
-            self.headers["Accept-Language"] = lc.lower().replace('_', '-')
-
-        self.cert_file = cert_file
-        self.key_file = key_file
-        self.ca_dir = ca_dir
-        self.insecure = insecure
-        self.username = username
-        self.password = password
-        self.ssl_verify_depth = ssl_verify_depth
-        self.proxy_hostname = proxy_hostname
-        self.proxy_port = proxy_port
-        self.proxy_user = proxy_user
-        self.proxy_password = proxy_password
-
-        # Setup basic authentication if specified:
-        if username and password:
-            encoded = base64.b64encode(':'.join((username, password)))
-            basic = 'Basic %s' % encoded
-            self.headers['Authorization'] = basic
-
-    def _decode_list(self, data):
+class JsonDecoder(object):
+    @classmethod
+    def decode_list(cls, data):
         rv = []
         for item in data:
             if isinstance(item, unicode):
                 item = item.encode('utf-8')
             elif isinstance(item, list):
-                item = self._decode_list(item)
+                item = cls.decode_list(item)
             elif isinstance(item, dict):
-                item = self._decode_dict(item)
+                item = cls.decode_dict(item)
             rv.append(item)
         return rv
 
-    def _decode_dict(self, data):
+    @classmethod
+    def decode_dict(cls, data):
         rv = {}
         for key, value in data.iteritems():
             if isinstance(key, unicode):
@@ -486,186 +297,98 @@ class Restlib(object):
             if isinstance(value, unicode):
                 value = value.encode('utf-8')
             elif isinstance(value, list):
-                value = self._decode_list(value)
+                value = cls.decode_list(value)
             elif isinstance(value, dict):
-                value = self._decode_dict(value)
+                value = cls.decode_dict(value)
             rv[key] = value
         return rv
 
-    def _load_ca_certificates(self, context):
-        loaded_ca_certs = []
+
+class RhsmResponseValidator(object):
+    def __init__(self):
+        self.json_decoder = JsonDecoder.decode_dict
+
+    def try_to_parse(self, response):
+        # got some status code that might be an error
+        # try vaguely to see if it had a json parseable body
         try:
-            for cert_file in os.listdir(self.ca_dir):
-                if cert_file.endswith(".pem"):
-                    cert_path = os.path.join(self.ca_dir, cert_file)
-                    res = context.load_verify_info(cert_path)
-                    loaded_ca_certs.append(cert_file)
-                    if res == 0:
-                        raise BadCertificateException(cert_path)
-        except OSError, e:
-            raise ConnectionSetupException(e.strerror)
+            return json.loads(response.text,
+                              object_hook=self.json_decoder)
+        except ValueError, e:
+            log.info("Response: %s" % response.status_code)
+            log.info("JSON parsing error: %s" % e)
+        except Exception, e:
+            log.error("Response: %s" % response.status_code)
+            log.exception(e)
 
-        if loaded_ca_certs:
-            log.debug("Loaded CA certificates from %s: %s" % (self.ca_dir, ', '.join(loaded_ca_certs)))
+        return None
 
-    # FIXME: can method be emtpty?
-    def _request(self, request_type, method, info=None):
-        handler = self.apihandler + method
+    def validate(self, response):
+        status_code = response.status_code
+        if status_code in [200, 202, 204]:
+            return
 
-        # See M2Crypto/SSL/Context.py in m2crypto source and
-        # https://www.openssl.org/docs/ssl/SSL_CTX_new.html
-        # This ends up invoking SSLv23_method, which is the catch all
-        # "be compatible" protocol, even though it explicitly is not
-        # using sslv2. This will by default potentially include sslv3
-        # if not used with post-poodle openssl. If however, the server
-        # intends to not offer sslv3, it's workable.
-        #
-        # So this supports tls1.2, 1.1, 1.0, and/or sslv3 if supported.
-        context = SSL.Context("sslv23")
+        parsed_response = None
 
-        # Disable SSLv2 and SSLv3 support to avoid poodles.
-        context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
+        if response.text:
+            parsed_response = self.try_to_parse(response)
 
-        if self.insecure:  # allow clients to work insecure mode if required..
-            context.post_connection_check = NoOpChecker()
+        # A better replacement would be to use the
+        # request.Request.raise_for_status() and
+        # map
+        if not parsed_response:
+            self.raise_exception_based_on_just_status_code(response)
+            return
+
+        # see if we have been deleted and hit a 410
+        self.check_for_gone(status_code, parsed_response)
+
+        # I guess this is where we would have an exception mapper if we
+        # had more meaningful exceptions. We've gotten a response from
+        # the server that means something.
+
+        # FIXME: we can get here with a valid json response that
+        # could be anything, we don't verify it anymore
+        error_msg = self._parse_msg_from_error_response_body(parsed_response)
+        raise RestlibException(status_code, error_msg)
+
+    def check_for_gone(self, status_code, parsed_response):
+        # find and raise a GoneException on '410' with 'deleteId' in the
+        # content, implying that the resource has been deleted
+        # NOTE: a 410 with a unparseable content will raise
+        # RemoteServerException
+        if status_code != 410:
+            return
+
+        if 'deletedId' in parsed_response:
+            raise GoneException(status_code,
+                                parsed_response['displayMessage'],
+                                parsed_response['deletedId'])
+
+    def raise_exception_based_on_just_status_code(self, response):
+        # This really needs an exception mapper too...
+        status_code = response.status_code
+        request_type = response.request.method
+        handler = response.request.path_url
+
+        if status_code in [404, 410, 500, 502, 503, 504]:
+            raise RemoteServerException(status_code,
+                                        request_type=request_type,
+                                        handler=handler)
+        elif status_code in [401]:
+            raise UnauthorizedException(status_code,
+                                        request_type=request_type,
+                                        handler=handler)
+        elif status_code in [403]:
+            raise ForbiddenException(status_code,
+                                     request_type=request_type,
+                                     handler=handler)
+#        elif status code in [429]:
+#            raise RateLimitExceededException(status_code)
+
         else:
-            # Proper peer verification is essential to prevent MITM attacks.
-            context.set_verify(
-                    SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
-                    self.ssl_verify_depth)
-            if self.ca_dir is not None:
-                self._load_ca_certificates(context)
-        if self.cert_file and os.path.exists(self.cert_file):
-            context.load_cert(self.cert_file, keyfile=self.key_file)
-
-        if self.proxy_hostname and self.proxy_port:
-            log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
-            conn = RhsmProxyHTTPSConnection(self.proxy_hostname, self.proxy_port,
-                                            username=self.proxy_user,
-                                            password=self.proxy_password,
-                                            ssl_context=context)
-            # this connection class wants the full url
-            handler = "https://%s:%s%s" % (self.host, self.ssl_port, handler)
-        else:
-            conn = httpslib.HTTPSConnection(self.host, self.ssl_port, ssl_context=context)
-
-        if info is not None:
-            body = json.dumps(info, default=json.encode)
-        else:
-            body = None
-
-        log.debug("Making request: %s %s" % (request_type, handler))
-
-        if self.user_agent:
-            self.headers['User-Agent'] = self.user_agent
-
-        headers = self.headers
-        if body is None:
-            headers = dict(self.headers.items() +
-                           {"Content-Length": "0"}.items())
-
-        # NOTE: alters global timeout_altered (and socket timeout)
-        set_default_socket_timeout_if_python_2_3()
-
-        try:
-            conn.request(request_type, handler, body=body, headers=headers)
-        except SSLError:
-            if self.cert_file:
-                id_cert = certificate.create_from_file(self.cert_file)
-                if not id_cert.is_valid():
-                    raise ExpiredIdentityCertException()
-            raise
-        response = conn.getresponse()
-        result = {
-            "content": response.read(),
-            "status": response.status,
-            "headers": dict(response.getheaders())
-        }
-
-        response_log = 'Response: status=' + str(result['status'])
-        if response.getheader('x-candlepin-request-uuid'):
-            response_log = "%s, requestUuid=%s" % (response_log,
-                    response.getheader('x-candlepin-request-uuid'))
-        log.debug(response_log)
-
-        # Look for server drift, and log a warning
-        if drift_check(response.getheader('date')):
-            log.warn("Clock skew detected, please check your system time")
-
-        # FIXME: we should probably do this in a wrapper method
-        # so we can use the request method for normal http
-
-        self.validateResponse(result, request_type, handler)
-
-        # handle empty, but succesful responses, ala 204
-        if not len(result['content']):
-            return None
-
-        return json.loads(result['content'], object_hook=self._decode_dict)
-
-    def validateResponse(self, response, request_type=None, handler=None):
-
-        # FIXME: what are we supposed to do with a 204?
-        if str(response['status']) not in ["200", "202", "204"]:
-            parsed = {}
-            if not response.get('content'):
-                parsed = {}
-            else:
-                # try vaguely to see if it had a json parseable body
-                try:
-                    parsed = json.loads(response['content'], object_hook=self._decode_dict)
-                except ValueError, e:
-                    log.error("Response: %s" % response['status'])
-                    log.error("JSON parsing error: %s" % e)
-                except Exception, e:
-                    log.error("Response: %s" % response['status'])
-                    log.exception(e)
-
-            if parsed:
-                # Find and raise a GoneException on '410' with 'deletedId' in the
-                # content, implying that the resource has been deleted.
-
-                # NOTE: a 410 with a unparseable content will raise
-                # RemoteServerException and will not cause the client
-                # to delete the consumer cert.
-                if str(response['status']) == "410":
-                    raise GoneException(response['status'],
-                                        parsed['displayMessage'],
-                                        parsed['deletedId'])
-
-                # I guess this is where we would have an exception mapper if we
-                # had more meaningful exceptions. We've gotten a response from
-                # the server that means something.
-
-                error_msg = self._parse_msg_from_error_response_body(parsed)
-                if str(response['status']) in ['429']:
-                    raise RateLimitExceededException(response['status'],
-                                                     error_msg,
-                                                     headers=response.get('headers'))
-
-                # FIXME: we can get here with a valid json response that
-                # could be anything, we don't verify it anymore
-                raise RestlibException(response['status'], error_msg, response.get('headers'))
-            else:
-                # This really needs an exception mapper too...
-                if str(response['status']) in ["404", "410", "500", "502", "503", "504"]:
-                    raise RemoteServerException(response['status'],
-                                                request_type=request_type,
-                                                handler=handler)
-                elif str(response['status']) in ["401"]:
-                    raise UnauthorizedException(response['status'],
-                                                request_type=request_type,
-                                                handler=handler)
-                elif str(response['status']) in ["403"]:
-                    raise ForbiddenException(response['status'],
-                                             request_type=request_type,
-                                             handler=handler)
-                elif str(response['status']) in ['429']:
-                    raise RateLimitExceededException(response['status'])
-
-                else:
-                    # unexpected with no valid content
-                    raise NetworkException(response['status'])
+            # unexpected with no valid content
+            raise NetworkException(status_code)
 
     def _parse_msg_from_error_response_body(self, body):
 
@@ -677,20 +400,439 @@ class Restlib(object):
         if 'errors' in body:
             return " ".join("%s" % errmsg for errmsg in body['errors'])
 
-    def request_get(self, method):
-        return self._request("GET", method)
 
+class ProxyInfo(object):
+    def __init__(self, hostname, port, username=None, password=None):
+        self.hostname = hostname
+        self.port = port
+        self.username = username
+        self.password = password
+        self.auth_slug = None
+        self.url = None
+        self.scheme_map = {}
+        self.scheme = "http://"
+
+        if self.username:
+            self.auth_slug = "%s" % self.username
+        if self.password:
+            self.auth_slug += ":%s" % self.password
+        if self.auth_slug:
+            self.auth_slug += '@'
+
+        if self.hostname and self.port:
+            self.url = "%s%s%s:%s/" % (self.scheme,
+                                       self.auth_slug or '',
+                                       self.hostname,
+                                       self.port)
+        log.debug("proxy_info.url=%s", self.url)
+        self.scheme_map = {'https': self.url,
+                           'http': self.url}
+
+
+class ClientCertInfo(object):
+    def __init__(self, cert_file=None, key_file=None):
+        self.cert_file = cert_file
+        self.key_file = key_file
+
+        self.cert_pair = (self.cert_file,
+                          self.key_file)
+
+    def validate_cert(self):
+        id_cert = certificate.create_from_file(self.cert_file)
+        if not id_cert.is_valid():
+            raise ExpiredIdentityCertException()
+
+
+class ServerCertInfo(object):
+    def __init__(self, ca_bundle, ca_dir=None, verify=True, verify_depth=None):
+        self.ca_bundle = ca_bundle  # ?
+        self.ca_dir = ca_dir
+        self.verify = verify
+        # 3?
+        self.verify_depth = verify_depth or 3
+
+
+class RequestsSessionFactory(object):
+    @classmethod
+    def https_no_auth(cls, auth=None,
+                      server_cert_info=None,
+                      client_cert_info=None,
+                      proxy_info=None):
+        pass
+
+    def __init__(self, auth=None, server_cert_info=None,
+                client_cert_info=None, proxy_info=None):
+
+        session = self.create_session()
+#        session = self.setup_proxy(session, proxy_info)
+#        session = self.setup_server_cert_verify(session, server_cert_info)
+#        session = self.setup_client_cert_auth(session, client_cert_info)
+        session = self.setup_auth(session, auth)
+        # Use an HttpAdaptor and overrides it's cert_verify
+        #  ... then we could map specific url subpaths to different auth setups
+        #      ie, /consumers is consumer cert while and /status are Plain https
+        self.session = session
+        log.debug("session %s", session)
+
+    def create_session(self):
+        return requests.Session()
+
+    def setup_proxy(self, session, proxy_info):
+        if not proxy_info:
+            return session
+        if not proxy_info.url:
+            return session
+
+        session.proxy = proxy_info.scheme_map
+        log.debug("session.proxy=%s", session.proxy)
+        return session
+
+    def setup_auth(self, session, auth):
+        session.auth = auth
+        log.debug("session.auth = %s", session.auth)
+        log.debug("auth = %s", auth)
+        return session
+
+    def setup_client_cert_auth(self, session, client_cert_info):
+        if not client_cert_info:
+            return session
+
+        session.cert = client_cert_info.cert_pair
+        log.debug("session.cert=%s", session.cert)
+        return session
+
+    def setup_server_cert_verify(self, session, server_cert_info):
+        if not server_cert_info:
+            return session
+
+        # verify by default in base
+        if not server_cert_info.verify:
+            session.verify = False
+        else:
+            session.verify = server_cert_info.ca_bundle
+
+        # verify depth
+        log.debug("session=%s verify=%s", session, session.verify)
+        return session
+
+
+class RhsmHTTPAdapter(requests.adapters.HTTPAdapter):
+    pass
+
+
+class MyAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = PoolManager(num_pools=connections,
+                                       maxsize=maxsize,
+                                       block=block,
+                                       ssl_version=ssl.PROTOCOL_TLSv1)
+
+
+# FIXME: it would be nice if the ssl server connection stuff
+# was decomposed from the api handling parts
+class Restlib(object):
+    """
+     A wrapper around httplib to make rest calls easier
+     See validateResponse() to learn when exceptions are raised as a result
+     of communication with the server.
+    """
+    def __init__(self, host, ssl_port, apihandler,
+                 auth=None,
+                 server_cert_info=None,
+                 client_cert_info=None,
+                 proxy_info=None):
+        self.host = host
+        self.ssl_port = ssl_port
+        self.apihandler = apihandler
+        self.server_cert_info = server_cert_info
+        self.client_cert_info = client_cert_info
+        self.proxy_info = proxy_info
+
+        lc = _get_locale()
+
+        self.headers = {"Content-type": "application/json",
+                        "Accept": "application/json",
+                        "x-python-rhsm-version": python_rhsm_version,
+                        "x-subscription-manager-version": subman_version}
+
+        if lc:
+            self.headers["Accept-Language"] = lc.lower().replace('_', '-')
+
+        log.debug("Restlib init auth=%s", auth)
+        self.auth = auth or RhsmPlainHttpsAuth()
+        log.debug("self.auth %s auth %s", self.auth, auth)
+
+        #self.host = "grimlock.usersys.redhat.com"
+        #self.ssl_port = 443
+        #self.apihandler = "/candlepin"
+        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
+        log.debug("bu1 %s", self.base_url)
+        self.host = "grimlock.usersys.redhat.com"
+        self.ssl_port = 8443
+        self.apihandler = "/candlepin"
+        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
+        log.debug("bu %s", self.base_url)
+
+        # We could set connect and read timeouts
+        # we could setup response hooks for caching
+
+#        self.session_factory = RequestsSessionFactory(auth=self.auth,
+#                                              server_cert_info=self.server_cert_info,
+#                                              client_cert_info=self.client_cert_info,
+#                                              proxy_info=self.proxy_info)
+
+        self.session = requests.Session()
+        self.session.verify = False
+        self.session.mount('https://', MyAdapter())
+        self.session.auth = self.auth
+        #self.session = self.session_factory.session
+        log.debug("self.base_url=%s", self.base_url)
+        log.debug("self.session %s", self.session)
+    # restlib should be api info, requestsSession connection info
+    # give restlib a host/port and a requestsSession, and UepConnection can
+    # assemble those
+
+    def json_dumps(self, info=None):
+        data = None
+        if info is not None:
+            data = json.dumps(info, default=json.encode)
+        return data
+
+    def json_loads(self, response_body):
+        # handle empty, but succesful responses, ala 204
+        if not len(response_body):
+            return None
+
+        return json.loads(response_body, object_hook=JsonDecoder.decode_dict)
+
+    # can and will raise exceptions
+    def check_response(self, response):
+        self.log_response(response)
+        self.drift_check(response)
+        self.validate_response(response)
+
+    # FIXME: should be able to move this to just per session
+    def drift_check(self, response):
+        # Look for server drift, and log a warning
+        if drift_check(response.headers.get('date')):
+            log.warn("Clock skew detected, please check your system time")
+
+    def log_response(self, response):
+        log.debug("request headers %s", response.request.headers)
+        log.debug("Response: status=%s requestUuid=%s",
+                  response.status_code, response.headers.get('x-candepin-request-uuid') or '')
+
+    def validate_response(self, response):
+        validator = RhsmResponseValidator()
+        validator.validate(response)
+
+    # FIXME: do we need to provide compat for validateResponse?
+
+    def full_url(self, url_fragment):
+        # url join? candlepin is picky about extra /'s
+        return "%s%s" % (self.base_url, url_fragment)
+
+    def _request_wrapper(self, verb, full_url, data=None):
+        """Try to catch the case where we get TLS errors because of an expired cert."""
+        try:
+            log.debug("self.session=%s", self.session)
+            log.debug("full_url=%s verb=%s", full_url, verb)
+            log.debug("self.session.request=%s %s", self.session.request, dir(self.session.request))
+            request = self.session.request(verb, full_url, data=data)
+            log.debug("wrapper ession=%s dir=%s", request, dir(request))
+            return request
+        # FIXME: use underlying SSL errors
+        except Exception, e:
+            log.debug(e)
+            if self.client_cert_info:
+                self.client_cert_info.validate_cert()
+            raise
+
+    # return request.Request objects
+    def _requests_request(self, verb, method, data=None):
+        full_url = self.full_url(method)
+        log.debug("requests_request %s", full_url)
+        return self._request_wrapper(verb, full_url, data=data)
+
+    # return text
+    def get(self, method):
+        log.debug("get method %s session.auth=%s", method, self.session.auth)
+        #r = self._requests_request(verb='GET', method=method)
+        r = self.session.get(self.full_url(method))
+        self.check_response(r)
+        return r.text
+
+    # return objects
+    def request_get(self, method):
+        log.debug("request_get=%s", method)
+        response_body = self.get(method)
+        return self.json_loads(response_body)
+
+    # returns the body of the content or raises exceptions
+    def post(self, method, data=None):
+        r = self._requests_request(verb='POST', method=method, data=data)
+        self.check_response(r)
+        return r.text
+
+    # takes in python objects and returns python objects
     def request_post(self, method, params=None):
-        return self._request("POST", method, params)
+        # params is dict to be serialized to json
+        data = self.json_dumps(params)
+        response_body = self.post(method, data=data)
+        return self.json_loads(response_body)
+
+    # returns the body of the content or raises exceptions
+    def put(self, method, data=None):
+        r = self._requests_request(verb='PUT', method=method, data=data)
+        self.check_response(r)
+        return r.text
+
+    # takes in python objects and returns python objects
+    def request_put(self, method, params=None):
+        # params is dict to be serialized to json
+        data = self.json_dumps(params)
+        response_body = self.put(method, data=data)
+        return self.json_loads(response_body)
+
+    # return text
+    def head(self, method):
+        r = self._requests_request(verb='HEAD', method=method)
+        self.check_response(r)
+        return r.text
 
     def request_head(self, method):
-        return self._request("HEAD", method)
+        response_body = self.get(method)
+        return self.json_loads(response_body)
 
-    def request_put(self, method, params=None):
-        return self._request("PUT", method, params)
+    def delete(self, method, data=None):
+        r = self._requests_request(verb='DELETE', method=method, data=data)
+        self.check_response(r)
+        return r.text
 
     def request_delete(self, method, params=None):
-        return self._request("DELETE", method, params)
+        data = self.json_dumps(params)
+        response_body = self.delete(method, data=data)
+        return self.json_loads(response_body)
+
+
+class EntitlementCertRestlib(Restlib):
+    ent_dir = "/etc/pki/entitlement"
+
+    def __init__(self, host, *args, **kwargs):
+        # cdn is always 443 and / handler
+        # get the proxy information from the environment variable
+        # if available
+        #info = get_env_proxy_info()
+        super(EntitlementCertRestlib, self).__init__(host, 443, '/', args, kwargs)
+
+        # TODO: plug in env proxy info
+
+    def _setup_server_cert_verify(self):
+        log.error("FIXME REMOVE ME FIXME REMOVE ME")
+        self.requests_session.verify = False
+
+    def get_versions(self, path):
+        try:
+            return self.get(path)
+        except requests.exceptions.HTTPError, e:
+            log.debug(e)
+            log.debug("Error getting listing from %s", e.response.request.url)
+        return ''
+
+    def validate_response(self, response):
+        response.raise_for_status()
+
+ContentConnection = EntitlementCertRestlib
+
+
+class RhsmAuth(requests.auth.AuthBase):
+    def __init__(self):
+        self.log = logging.getLogger("%s.%s" % (__name__, type(self).__name__))
+
+    def __call__(self, r):
+        self.log.debug("base_auth %s", r)
+        return r
+
+
+class nouRhsmBasicAuth(requests.auth.HTTPBasicAuth):
+    def __init__(self, username, password):
+        super(RhsmBasicAuth, self).__init__(username, password)
+        self.log = logging.getLogger(type(self).__name__)
+        self.log.debug("rhsmBasicAuth")
+
+    def __call__(self, r):
+        super(RhsmBasicAuth, self).__call__(r)
+        r.headers["some-rhsm-header"] = "caneatcheese(1)=true"
+        self.log.debug("rhsmBasicAuth.call")
+        return r
+
+RhsmBasicAuth = requests.auth.HTTPBasicAuth
+
+
+class RhsmClientCertAuth(RhsmAuth):
+    has_client_cert = True
+
+    def __init__(self, cert_file, key_file):
+        super(RhsmClientCertAuth, self).__init__()
+        self.cert_file = cert_file
+        self.key_file = key_file
+
+    def __call__(self, r):
+        super(RhsmClientCertAuth, self).__call__(r)
+        r.cert = (self.cert_file, self.key_file)
+        self.log.debug("client cert auth %s %s", self.cert_file, self.key_file)
+        return r
+
+
+class RhsmEntitlementCertAuth(RhsmAuth):
+    ent_dir = "/etc/pki/entitlement"
+
+    def __call__(self, r):
+        super(RhsmEntitlementCertAuth, self).__call__(r)
+        return r
+
+    def _setup_ent_certs(self):
+        try:
+            cert_key_paths = self._find_cert_key_paths()
+
+            cert_key_path = self._pick_one(cert_key_paths)
+
+            self.cert_file = cert_key_path[0]
+            self.key_path = cert_key_path[1]
+        except OSError, e:
+            raise ConnectionSetupException(e.strerror)
+
+    def _find_cert_key_paths(self):
+        cert_dir_files = os.listdir(self.ent_dir)
+        cert_files = [x for x in cert_dir_files if self._cert_mach(x)]
+
+        return [self._cert_key_paths(y) for y in cert_files]
+
+    def _cert_key_paths(self, cert_file):
+        cert_path = os.path.join(self.ent_dir, cert_file)
+        key_path = os.path.join(self.ent_dir, "%s-key.pem" % cert_file.split('.', 1)[0])
+        return (cert_path, key_path)
+
+    # we have many potential ent certs. Pick one.
+    # For now, the first one. But it should learn to pick the right
+    # one for the url.
+    # FIXME
+    def _pick_one(self, cert_key_paths):
+        return cert_key_paths[0]
+
+    def _cert_match(self, cert_file):
+        return cert_file.endswith(".pem") and not cert_file.endswith("-key.pem")
+
+
+class RhsmPlainHttpsAuth(RhsmAuth):
+    verify = True
+
+    def __call__(self, r):
+        super(RhsmPlainHttpsAuth, self).__call__(r)
+        # default to verify
+        # verify is a 3 value boolean, True, False, or a ca_bundle path
+        r.verify = self.verify
+        return r
 
 
 # FIXME: there should probably be a class here for just
@@ -725,30 +867,31 @@ class UEPConnection:
         self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
         self.handler = handler or config.get('server', 'prefix')
 
+        log.debug("HANDLER %s", self.handler)
         # remove trailing "/" from the prefix if it is there
         # BZ848836
         self.handler = self.handler.rstrip("/")
 
         # get the proxy information from the environment variable
-        # if available and host is not in no_proxy
-        if urllib.proxy_bypass_environment(self.host):
-            info = {'proxy_username': '',
-                   'proxy_hostname': '',
-                   'proxy_port': '',
-                   'proxy_password': ''}
-        else:
-            info = utils.get_env_proxy_info()
+        # if available
+        info = get_env_proxy_info()
 
         self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
         self.proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
         self.proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
         self.proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
+        self.proxy_info = ProxyInfo(self.proxy_hostname, self.proxy_port,
+                                    self.proxy_user, self.proxy_password)
 
         self.cert_file = cert_file
         self.key_file = key_file
+        self.client_cert_info = ClientCertInfo(self.cert_file, self.key_file)
+
         self.username = username
         self.password = password
+        # AuthInfo ?
 
+        self.capabilities = None
         self.ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
         self.ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
 
@@ -759,6 +902,15 @@ class UEPConnection:
             if config_insecure:
                 self.insecure = True
 
+        # for logging, for now, FIXME
+        self.verify = not self.insecure
+
+        self.ca_bundle = os.path.join(self.ca_cert_dir, 'ca_bundle.pem')
+        self.server_cert_info = ServerCertInfo(self.ca_bundle,
+                                               self.verify,
+                                               self.ssl_verify_depth)
+
+        log.debug("self.ca_bundle=%s", self.ca_bundle)
         using_basic_auth = False
         using_id_cert_auth = False
 
@@ -778,35 +930,39 @@ class UEPConnection:
         if self.proxy_hostname and self.proxy_port:
             proxy_description = "http_proxy=%s:%s " % (self.proxy_hostname, self.proxy_port)
         auth_description = None
+
+        log.debug("using_basic_auth=%s using_id_cert_auth=%s", using_basic_auth, using_id_cert_auth)
+
+        # FIXME: replace with url url->auth mapper thing?
         # initialize connection
         if using_basic_auth:
+            auth = RhsmBasicAuth(self.username, self.password)
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                    username=self.username, password=self.password,
-                    proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                    proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                    ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                    ssl_verify_depth=self.ssl_verify_depth)
-            auth_description = "auth=basic username=%s" % username
+                                auth=auth,
+                                server_cert_info=self.server_cert_info,
+                                proxy_info=self.proxy_info)
+            auth_description = "auth=basic username=%s ca_dir=%s verify=%s" % \
+                (username, self.ca_cert_dir, self.insecure)
         elif using_id_cert_auth:
+            auth = RhsmClientCertAuth(self.cert_file, self.key_file)
             self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                                cert_file=self.cert_file, key_file=self.key_file,
-                                proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                                proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                                ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                                ssl_verify_depth=self.ssl_verify_depth)
-            auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.insecure)
-        else:
-            self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                    proxy_hostname=self.proxy_hostname, proxy_port=self.proxy_port,
-                    proxy_user=self.proxy_user, proxy_password=self.proxy_password,
-                    ca_dir=self.ca_cert_dir, insecure=self.insecure,
-                    ssl_verify_depth=self.ssl_verify_depth)
-            auth_description = "auth=none"
+                                auth=auth,
+                                server_cert_info=self.server_cert_info,
+                                client_cert_info=self.client_cert_info,
+                                proxy_info=self.proxy_info)
 
-        self.conn.user_agent = "RHSM/1.0 (cmd=%s)" % utils.cmd_name(sys.argv)
+            auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
+        else:
+            log.debug("plain https auth")
+            # https but no client cert and no basic auth
+            auth = RhsmPlainHttpsAuth()
+            self.conn = Restlib(self.host, self.ssl_port, self.handler,
+                                auth=auth,
+                                server_cert_info=self.server_cert_info,
+                                proxy_info=self.proxy_info)
+            auth_description = "auth=none ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
 
         self.resources = None
-        self.capabilities = None
         connection_description = ""
         if proxy_description:
             connection_description += proxy_description
@@ -926,17 +1082,15 @@ class UEPConnection:
 
         """
         if (self.has_capability("hypervisors_async")):
-            priorContentType = self.conn.headers['Content-type']
-            self.conn.headers['Content-type'] = 'text/plain'
-
-            params = {"env": env, "cloaked": False}
-            if options and options.reporter_id and len(options.reporter_id) > 0:
-                params['reporter_id'] = options.reporter_id
-
-            query_params = urlencode(params)
-            url = "/hypervisors/%s?%s" % (owner, query_params)
-            res = self.conn.request_post(url, host_guest_mapping)
-            self.conn.headers['Content-type'] = priorContentType
+            pass
+            # FIXME:
+            #           priorContentType = self.conn.headers['Content-type']
+            #           self.conn.headers['Content-type'] = 'text/plain'
+            #           query_params = urlencode({"env": env, "cloaked": False})
+            #           url = "/hypervisors/%s?%s" % (owner, query_params)
+            #           res = self.conn.request_post(url, host_guest_mapping)
+            #           self.conn.headers['Content-type'] = priorContentType
+            raise Exception("adrian hasn't fixed this yet")
         else:
             # fall back to original report api
             # this results in the same json as in the result_data field
@@ -944,7 +1098,7 @@ class UEPConnection:
             query_params = urlencode({"owner": owner, "env": env})
             url = "/hypervisors?%s" % (query_params)
             res = self.conn.request_post(url, host_guest_mapping)
-        return res
+            return res
 
     def updateConsumerFacts(self, consumer_uuid, facts={}):
         """
