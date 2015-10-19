@@ -453,12 +453,15 @@ class ClientCertInfo(object):
 
 
 class ServerCertInfo(object):
-    def __init__(self, ca_bundle, ca_dir=None, verify=True, verify_depth=None):
+    def __init__(self, ca_bundle, ca_dir=None,
+                 verify=True, verify_depth=None, insecure=False):
         self.ca_bundle = ca_bundle  # ?
         self.ca_dir = ca_dir
         self.verify = verify
         # 3?
         self.verify_depth = verify_depth or 3
+        # Mostly for logging/reporting since verify is not quite ! insecure
+        self.insecure = insecure
 
 
 class RequestsSessionFactory(object):
@@ -871,7 +874,7 @@ class UEPConnection:
         # BZ848836
         self.handler = self.handler.rstrip("/")
 
-        self.proxy_info = self.__setup_proxy(proxy_hostname, proxy_port,
+        self.proxy_info = self._setup_proxy(proxy_hostname, proxy_port,
                                              proxy_user, proxy_password)
 
         self.client_cert_info = ClientCertInfo(cert_file, key_file)
@@ -881,25 +884,8 @@ class UEPConnection:
         # AuthInfo ?
 
         self.capabilities = None
-        self.ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
-        self.ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
 
-        self.insecure = insecure
-        if insecure is None:
-            self.insecure = False
-            config_insecure = safe_int(config.get('server', 'insecure'))
-            if config_insecure:
-                self.insecure = True
-
-        # for logging, for now, FIXME
-        self.verify = not self.insecure
-
-        self.ca_bundle = os.path.join(self.ca_cert_dir, 'ca_bundle.pem')
-        self.server_cert_info = ServerCertInfo(self.ca_bundle,
-                                               self.verify,
-                                               self.ssl_verify_depth)
-
-        log.debug("self.ca_bundle=%s", self.ca_bundle)
+        self.server_cert_info = self._setup_server_cert_info(insecure=insecure)
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
@@ -916,6 +902,29 @@ class UEPConnection:
                             session=self.session)
 
         self.resources = None
+
+    def _setup_server_cert_info(self, insecure=False):
+
+        ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
+
+        if insecure is None:
+            insecure = False
+
+        config_insecure = safe_int(config.get('server', 'insecure'))
+        if config_insecure:
+            insecure = True
+
+        verify = not insecure
+
+        ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
+        ca_bundle = os.path.join(ca_cert_dir, 'ca_bundle.pem')
+        log.debug("ca_bundle=%s", ca_bundle)
+
+        server_cert_info = ServerCertInfo(ca_bundle=ca_bundle,
+                                          verify=verify,
+                                          verify_depth=ssl_verify_depth,
+                                          insecure=insecure)
+        return server_cert_info
 
     def _setup_auth(self):
         using_basic_auth = False
@@ -937,7 +946,7 @@ class UEPConnection:
         # initialize connection
         return auth
 
-    def __setup_proxy(self, proxy_hostname, proxy_port, proxy_user, proxy_password):
+    def _setup_proxy(self, proxy_hostname, proxy_port, proxy_user, proxy_password):
 
         # get the proxy information from the environment variable
         # if available
