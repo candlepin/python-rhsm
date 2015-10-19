@@ -438,6 +438,12 @@ class ProxyInfo(object):
                            'http': self.url}
 
 
+class UserAuthInfo(object):
+    def __init__(self, username=None, password=None):
+        self.username = username
+        self.password = password
+
+
 class ClientCertInfo(object):
     def __init__(self, cert_file=None, key_file=None):
         self.cert_file = cert_file
@@ -757,10 +763,11 @@ class RhsmAuth(requests.auth.AuthBase):
 
 
 class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
-    def __init__(self, username, password):
-        super(RhsmBasicAuth, self).__init__(username, password)
+    def __init__(self, user_auth_info):
+        super(RhsmBasicAuth, self).__init__(user_auth_info.username,
+                                            user_auth_info.password)
         self.log = logging.getLogger(type(self).__name__)
-        self.log.debug("rhsmBasicAuth %s", username)
+        self.log.debug("rhsmBasicAuth %s", user_auth_info.username)
 
     def __call__(self, r):
         super(RhsmBasicAuth, self).__call__(r)
@@ -879,9 +886,8 @@ class UEPConnection:
 
         self.client_cert_info = ClientCertInfo(cert_file, key_file)
 
-        self.username = username
-        self.password = password
-        # AuthInfo ?
+        self.user_auth_info = UserAuthInfo(username=username,
+                                           password=password)
 
         self.capabilities = None
 
@@ -889,7 +895,8 @@ class UEPConnection:
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
-        self.auth = self._setup_auth()
+        self.auth = self._setup_auth(user_auth_info=self.user_auth_info,
+                                     client_cert_info=self.client_cert_info)
 
         self.session_factory = RequestsSessionFactory(auth=self.auth,
                                                       server_cert_info=self.server_cert_info,
@@ -926,17 +933,17 @@ class UEPConnection:
                                           insecure=insecure)
         return server_cert_info
 
-    def _setup_auth(self):
+    def _setup_auth(self, user_auth_info=None, client_cert_info=None):
         using_basic_auth = False
         using_id_cert_auth = False
 
         auth = None
-        if self.username and self.password:
+        if user_auth_info:
             using_basic_auth = True
-            auth = RhsmBasicAuth(self.username, self.password)
-        elif self.cert_file and self.key_file:
+            auth = RhsmBasicAuth(user_auth_info=user_auth_info)
+        elif client_cert_info:
             #auth = RhsmClientCertAuth(self.cert_file, self.key_file)
-            auth = RhsmClientCertAuth(self.client_cert_info)
+            auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
             using_id_cert_auth = True
 
         if using_basic_auth and using_id_cert_auth:
