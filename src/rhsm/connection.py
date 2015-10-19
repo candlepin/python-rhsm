@@ -896,7 +896,7 @@ class UEPConnection:
 
         self.capabilities = None
 
-        self.server_cert_info = self._setup_server_cert_info(insecure=insecure)
+        server_cert_info = self._setup_server_cert_info(insecure=insecure)
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
@@ -904,7 +904,7 @@ class UEPConnection:
                                      client_cert_info=client_cert_info)
 
         self.session_factory = RequestsSessionFactory(auth=self.auth,
-                                                      server_cert_info=self.server_cert_info,
+                                                      server_cert_info=server_cert_info,
                                                       #client_cert_info=self.client_cert_info,
                                                       proxy_info=self.proxy_info)
 
