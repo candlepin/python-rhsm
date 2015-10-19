@@ -557,6 +557,9 @@ class Restlib(object):
                  session=None):
         # FIXME: replace with baseurl, or just assume the passed
         #        in session has a HttpAdapter that knows the url
+        log.debug("%s host=%s, ssl_port=%s, apihandler=%s, session=%s",
+                  self.__class__.__name__, host, ssl_port, apihandler, session)
+
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
@@ -720,17 +723,9 @@ class Restlib(object):
         return self.json_loads(response_body)
 
 
+# TODO: Needs to be a wrapper class for setting up auth/session for cdn access
 class EntitlementCertRestlib(Restlib):
     ent_dir = "/etc/pki/entitlement"
-
-    def __init__(self, host, *args, **kwargs):
-        # cdn is always 443 and / handler
-        # get the proxy information from the environment variable
-        # if available
-        #info = get_env_proxy_info()
-        super(EntitlementCertRestlib, self).__init__(host, 443, '/', args, kwargs)
-
-        # TODO: plug in env proxy info
 
     def _setup_server_cert_verify(self):
         log.error("FIXME REMOVE ME FIXME REMOVE ME")
@@ -754,10 +749,6 @@ class RhsmAuth(requests.auth.AuthBase):
     def __init__(self):
         self.log = logging.getLogger("%s.%s" % (__name__, type(self).__name__))
 
-#    def __call__(self, r):
-#        self.log.debug("base_auth %s", r)
-#        return r
-
 
 class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
     def __init__(self, user_auth_info):
@@ -771,8 +762,6 @@ class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
         r.headers["some-rhsm-header"] = "caneatcheese(1)=true"
         self.log.debug("rhsmBasicAuth.call")
         return r
-
-#RhsmBasicAuth = requests.auth.HTTPBasicAuth
 
 
 class RhsmClientCertAuth(RhsmAuth):
