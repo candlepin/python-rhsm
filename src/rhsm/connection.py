@@ -126,6 +126,15 @@ class ConnectionSetupException(ConnectionException):
     pass
 
 
+class RhsmSSLError(ssl.SSLError):
+    def __init__(self, args=None):
+        self.args = args
+        self.message = "FIXME"
+
+    def __str__(self):
+        return "<RhsmSSLError %s %s>" % (self.args, self.message)
+
+
 class BadCertificateException(ConnectionException):
     """ Thrown when an error parsing a certificate is encountered. """
 
@@ -525,7 +534,7 @@ class MyAdapter(requests.adapters.HTTPAdapter):
         self.poolmanager = PoolManager(num_pools=connections,
                                        maxsize=maxsize,
                                        block=block,
-                                       ssl_version=ssl.PROTOCOL_TLSv1)
+                                       ssl_version=ssl.PROTOCOL_SSLv23)
 
 
 # FIXME: it would be nice if the ssl server connection stuff
@@ -567,24 +576,27 @@ class Restlib(object):
         #self.apihandler = "/candlepin"
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
         log.debug("bu1 %s", self.base_url)
-        self.host = "grimlock.usersys.redhat.com"
-        self.ssl_port = 8443
-        self.apihandler = "/candlepin"
+        #self.host = "grimlock.usersys.redhat.com"
+        #self.ssl_port = 8443
+        #self.apihandler = "/candlepin"
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
         log.debug("bu %s", self.base_url)
 
         # We could set connect and read timeouts
         # we could setup response hooks for caching
 
-#        self.session_factory = RequestsSessionFactory(auth=self.auth,
-#                                              server_cert_info=self.server_cert_info,
-#                                              client_cert_info=self.client_cert_info,
-#                                              proxy_info=self.proxy_info)
+        self.session_factory = RequestsSessionFactory(auth=self.auth,
+                                                      server_cert_info=self.server_cert_info,
+                                                      client_cert_info=self.client_cert_info,
+                                                      proxy_info=self.proxy_info)
 
         self.session = requests.Session()
-        self.session.verify = False
+        #self.session.verify =
         self.session.mount('https://', MyAdapter())
         self.session.auth = self.auth
+        log.debug("self.server_cert_info.ca_bundle=%s",
+                  self.server_cert_info.ca_bundle)
+        self.session.verify = self.server_cert_info.ca_bundle
         #self.session = self.session_factory.session
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
@@ -641,12 +653,16 @@ class Restlib(object):
             request = self.session.request(verb, full_url, data=data)
             log.debug("wrapper ession=%s dir=%s", request, dir(request))
             return request
+        # FIXME: for reasons unknown, ssl.SSLError.message is not a string and
+        #        and causes str() to fail and that causes chaos
+        except ssl.SSLError, e:
+            raise RhsmSSLError(args=e.args)
         # FIXME: use underlying SSL errors
         except Exception, e:
-            log.debug(e)
+            #log.exception(e)
             if self.client_cert_info:
                 self.client_cert_info.validate_cert()
-            raise
+            raise ConnectionException()
 
     # return request.Request objects
     def _requests_request(self, verb, method, data=None):
@@ -749,12 +765,12 @@ class RhsmAuth(requests.auth.AuthBase):
     def __init__(self):
         self.log = logging.getLogger("%s.%s" % (__name__, type(self).__name__))
 
-    def __call__(self, r):
-        self.log.debug("base_auth %s", r)
-        return r
+#    def __call__(self, r):
+#        self.log.debug("base_auth %s", r)
+#        return r
 
 
-class nouRhsmBasicAuth(requests.auth.HTTPBasicAuth):
+class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
     def __init__(self, username, password):
         super(RhsmBasicAuth, self).__init__(username, password)
         self.log = logging.getLogger(type(self).__name__)
@@ -766,7 +782,7 @@ class nouRhsmBasicAuth(requests.auth.HTTPBasicAuth):
         self.log.debug("rhsmBasicAuth.call")
         return r
 
-RhsmBasicAuth = requests.auth.HTTPBasicAuth
+#RhsmBasicAuth = requests.auth.HTTPBasicAuth
 
 
 class RhsmClientCertAuth(RhsmAuth):
