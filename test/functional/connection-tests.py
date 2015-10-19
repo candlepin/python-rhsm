@@ -40,7 +40,6 @@ class ConnectionTests(unittest.TestCase):
         self.cp = UEPConnection(username="admin", password="admin",
                 insecure=True)
         print "cp", self.cp.conn
-        print "auth", self.cp.conn.auth
         consumerInfo = self.cp.registerConsumer("test-consumer", "system", owner="admin")
         self.consumer_uuid = consumerInfo['uuid']
 

@@ -473,9 +473,9 @@ class RequestsSessionFactory(object):
                 client_cert_info=None, proxy_info=None):
 
         session = self.create_session()
-#        session = self.setup_proxy(session, proxy_info)
-#        session = self.setup_server_cert_verify(session, server_cert_info)
-#        session = self.setup_client_cert_auth(session, client_cert_info)
+        session = self.setup_proxy(session, proxy_info)
+        session = self.setup_server_cert_verify(session, server_cert_info)
+        session = self.setup_client_cert_auth(session, client_cert_info)
         session = self.setup_auth(session, auth)
         # Use an HttpAdaptor and overrides it's cert_verify
         #  ... then we could map specific url subpaths to different auth setups
@@ -546,16 +546,12 @@ class Restlib(object):
      of communication with the server.
     """
     def __init__(self, host, ssl_port, apihandler,
-                 auth=None,
-                 server_cert_info=None,
-                 client_cert_info=None,
-                 proxy_info=None):
+                 session=None):
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
-        self.server_cert_info = server_cert_info
-        self.client_cert_info = client_cert_info
-        self.proxy_info = proxy_info
+
+        self.session = session
 
         lc = _get_locale()
 
@@ -566,10 +562,6 @@ class Restlib(object):
 
         if lc:
             self.headers["Accept-Language"] = lc.lower().replace('_', '-')
-
-        log.debug("Restlib init auth=%s", auth)
-        self.auth = auth or RhsmPlainHttpsAuth()
-        log.debug("self.auth %s auth %s", self.auth, auth)
 
         #self.host = "grimlock.usersys.redhat.com"
         #self.ssl_port = 443
@@ -585,19 +577,10 @@ class Restlib(object):
         # We could set connect and read timeouts
         # we could setup response hooks for caching
 
-        self.session_factory = RequestsSessionFactory(auth=self.auth,
-                                                      server_cert_info=self.server_cert_info,
-                                                      client_cert_info=self.client_cert_info,
-                                                      proxy_info=self.proxy_info)
-
-        self.session = requests.Session()
-        #self.session.verify =
-        self.session.mount('https://', MyAdapter())
-        self.session.auth = self.auth
-        log.debug("self.server_cert_info.ca_bundle=%s",
-                  self.server_cert_info.ca_bundle)
-        self.session.verify = self.server_cert_info.ca_bundle
-        #self.session = self.session_factory.session
+        #self.session = requests.Session()
+        #self.session.mount('https://', MyAdapter())
+        #self.session.auth = self.auth
+        #self.session.verify = self.server_cert_info.ca_bundle
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
     # restlib should be api info, requestsSession connection info
@@ -774,7 +757,7 @@ class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
     def __init__(self, username, password):
         super(RhsmBasicAuth, self).__init__(username, password)
         self.log = logging.getLogger(type(self).__name__)
-        self.log.debug("rhsmBasicAuth")
+        self.log.debug("rhsmBasicAuth %s", username)
 
     def __call__(self, r):
         super(RhsmBasicAuth, self).__call__(r)
@@ -951,40 +934,45 @@ class UEPConnection:
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
-        if using_basic_auth:
-            auth = RhsmBasicAuth(self.username, self.password)
-            self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                                auth=auth,
-                                server_cert_info=self.server_cert_info,
-                                proxy_info=self.proxy_info)
-            auth_description = "auth=basic username=%s ca_dir=%s verify=%s" % \
-                (username, self.ca_cert_dir, self.insecure)
-        elif using_id_cert_auth:
-            auth = RhsmClientCertAuth(self.cert_file, self.key_file)
-            self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                                auth=auth,
-                                server_cert_info=self.server_cert_info,
-                                client_cert_info=self.client_cert_info,
-                                proxy_info=self.proxy_info)
+        self.auth = self._setup_auth()
 
-            auth_description = "auth=identity_cert ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
-        else:
-            log.debug("plain https auth")
-            # https but no client cert and no basic auth
-            auth = RhsmPlainHttpsAuth()
-            self.conn = Restlib(self.host, self.ssl_port, self.handler,
-                                auth=auth,
-                                server_cert_info=self.server_cert_info,
-                                proxy_info=self.proxy_info)
-            auth_description = "auth=none ca_dir=%s verify=%s" % (self.ca_cert_dir, self.verify)
+        self.session_factory = RequestsSessionFactory(auth=self.auth,
+                                                      server_cert_info=self.server_cert_info,
+                                                      client_cert_info=self.client_cert_info,
+                                                      proxy_info=self.proxy_info)
+
+        self.session = self.session_factory.session
+
+        self.conn = Restlib(self.host, self.ssl_port, self.handler,
+                            session=self.session)
 
         self.resources = None
+
         connection_description = ""
         if proxy_description:
             connection_description += proxy_description
         connection_description += "host=%s port=%s handler=%s %s" % (self.host, self.ssl_port,
                                                                     self.handler, auth_description)
         log.info("Connection built: %s", connection_description)
+
+    def _setup_auth(self):
+        using_basic_auth = False
+        using_id_cert_auth = False
+
+        auth = None
+        if self.username and self.password:
+            using_basic_auth = True
+            auth = RhsmBasicAuth(self.username, self.password)
+        elif self.cert_file and self.key_file:
+            auth = RhsmClientCertAuth(self.cert_file, self.key_file)
+            using_id_cert_auth = True
+
+        if using_basic_auth and using_id_cert_auth:
+            raise Exception("Cannot specify both username/password and "
+                    "cert_file/key_file")
+
+        # initialize connection
+        return auth
 
     def _load_supported_resources(self):
         """
