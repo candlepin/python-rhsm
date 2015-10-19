@@ -475,7 +475,7 @@ class RequestsSessionFactory(object):
         session = self.create_session()
         session = self.setup_proxy(session, proxy_info)
         session = self.setup_server_cert_verify(session, server_cert_info)
-        session = self.setup_client_cert_auth(session, client_cert_info)
+        #session = self.setup_client_cert_auth(session, client_cert_info)
         session = self.setup_auth(session, auth)
         # Use an HttpAdaptor and overrides it's cert_verify
         #  ... then we could map specific url subpaths to different auth setups
@@ -771,10 +771,10 @@ class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
 class RhsmClientCertAuth(RhsmAuth):
     has_client_cert = True
 
-    def __init__(self, cert_file, key_file):
+    def __init__(self, client_cert_info):
         super(RhsmClientCertAuth, self).__init__()
-        self.cert_file = cert_file
-        self.key_file = key_file
+        self.cert_file = client_cert_info.cert_file
+        self.key_file = client_cert_info.key_file
 
     def __call__(self, r):
         super(RhsmClientCertAuth, self).__call__(r)
@@ -871,20 +871,10 @@ class UEPConnection:
         # BZ848836
         self.handler = self.handler.rstrip("/")
 
-        # get the proxy information from the environment variable
-        # if available
-        info = get_env_proxy_info()
+        self.proxy_info = self.__setup_proxy(proxy_hostname, proxy_port,
+                                             proxy_user, proxy_password)
 
-        self.proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
-        self.proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
-        self.proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
-        self.proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
-        self.proxy_info = ProxyInfo(self.proxy_hostname, self.proxy_port,
-                                    self.proxy_user, self.proxy_password)
-
-        self.cert_file = cert_file
-        self.key_file = key_file
-        self.client_cert_info = ClientCertInfo(self.cert_file, self.key_file)
+        self.client_cert_info = ClientCertInfo(cert_file, key_file)
 
         self.username = username
         self.password = password
@@ -910,27 +900,6 @@ class UEPConnection:
                                                self.ssl_verify_depth)
 
         log.debug("self.ca_bundle=%s", self.ca_bundle)
-        using_basic_auth = False
-        using_id_cert_auth = False
-
-        if username and password:
-            using_basic_auth = True
-        elif cert_file and key_file:
-            using_id_cert_auth = True
-
-        if using_basic_auth and using_id_cert_auth:
-            raise Exception("Cannot specify both username/password and "
-                    "cert_file/key_file")
-        #if not (using_basic_auth or using_id_cert_auth):
-        #    raise Exception("Must specify either username/password or "
-        #            "cert_file/key_file")
-
-        proxy_description = None
-        if self.proxy_hostname and self.proxy_port:
-            proxy_description = "http_proxy=%s:%s " % (self.proxy_hostname, self.proxy_port)
-        auth_description = None
-
-        log.debug("using_basic_auth=%s using_id_cert_auth=%s", using_basic_auth, using_id_cert_auth)
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
@@ -938,7 +907,7 @@ class UEPConnection:
 
         self.session_factory = RequestsSessionFactory(auth=self.auth,
                                                       server_cert_info=self.server_cert_info,
-                                                      client_cert_info=self.client_cert_info,
+                                                      #client_cert_info=self.client_cert_info,
                                                       proxy_info=self.proxy_info)
 
         self.session = self.session_factory.session
@@ -947,13 +916,6 @@ class UEPConnection:
                             session=self.session)
 
         self.resources = None
-
-        connection_description = ""
-        if proxy_description:
-            connection_description += proxy_description
-        connection_description += "host=%s port=%s handler=%s %s" % (self.host, self.ssl_port,
-                                                                    self.handler, auth_description)
-        log.info("Connection built: %s", connection_description)
 
     def _setup_auth(self):
         using_basic_auth = False
@@ -964,7 +926,8 @@ class UEPConnection:
             using_basic_auth = True
             auth = RhsmBasicAuth(self.username, self.password)
         elif self.cert_file and self.key_file:
-            auth = RhsmClientCertAuth(self.cert_file, self.key_file)
+            #auth = RhsmClientCertAuth(self.cert_file, self.key_file)
+            auth = RhsmClientCertAuth(self.client_cert_info)
             using_id_cert_auth = True
 
         if using_basic_auth and using_id_cert_auth:
@@ -973,6 +936,22 @@ class UEPConnection:
 
         # initialize connection
         return auth
+
+    def __setup_proxy(self, proxy_hostname, proxy_port, proxy_user, proxy_password):
+
+        # get the proxy information from the environment variable
+        # if available
+        info = get_env_proxy_info()
+
+        _proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
+        _proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
+        _proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
+        _proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
+
+        proxy_info = ProxyInfo(_proxy_hostname, _proxy_port,
+                               _proxy_user, _proxy_password)
+
+        return proxy_info
 
     def _load_supported_resources(self):
         """
