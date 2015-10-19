@@ -884,10 +884,15 @@ class UEPConnection:
         self.proxy_info = self._setup_proxy(proxy_hostname, proxy_port,
                                              proxy_user, proxy_password)
 
-        self.client_cert_info = ClientCertInfo(cert_file, key_file)
+        # A null version of these objects would be useful
+        client_cert_info = None
+        if cert_file and key_file:
+            client_cert_info = ClientCertInfo(cert_file, key_file)
 
-        self.user_auth_info = UserAuthInfo(username=username,
-                                           password=password)
+        user_auth_info = None
+        if username and password:
+            user_auth_info = UserAuthInfo(username=username,
+                                          password=password)
 
         self.capabilities = None
 
@@ -895,8 +900,8 @@ class UEPConnection:
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
-        self.auth = self._setup_auth(user_auth_info=self.user_auth_info,
-                                     client_cert_info=self.client_cert_info)
+        self.auth = self._setup_auth(user_auth_info=user_auth_info,
+                                     client_cert_info=client_cert_info)
 
         self.session_factory = RequestsSessionFactory(auth=self.auth,
                                                       server_cert_info=self.server_cert_info,
@@ -943,6 +948,7 @@ class UEPConnection:
             auth = RhsmBasicAuth(user_auth_info=user_auth_info)
         elif client_cert_info:
             #auth = RhsmClientCertAuth(self.cert_file, self.key_file)
+
             auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
             using_id_cert_auth = True
 
