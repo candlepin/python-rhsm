@@ -546,8 +546,7 @@ class MyAdapter(requests.adapters.HTTPAdapter):
                                        ssl_version=ssl.PROTOCOL_SSLv23)
 
 
-# FIXME: it would be nice if the ssl server connection stuff
-# was decomposed from the api handling parts
+# At the moment, this API only supports blocking requests
 class Restlib(object):
     """
      A wrapper around httplib to make rest calls easier
@@ -556,6 +555,8 @@ class Restlib(object):
     """
     def __init__(self, host, ssl_port, apihandler,
                  session=None):
+        # FIXME: replace with baseurl, or just assume the passed
+        #        in session has a HttpAdapter that knows the url
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
@@ -572,16 +573,8 @@ class Restlib(object):
         if lc:
             self.headers["Accept-Language"] = lc.lower().replace('_', '-')
 
-        #self.host = "grimlock.usersys.redhat.com"
-        #self.ssl_port = 443
-        #self.apihandler = "/candlepin"
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
         log.debug("bu1 %s", self.base_url)
-        #self.host = "grimlock.usersys.redhat.com"
-        #self.ssl_port = 8443
-        #self.apihandler = "/candlepin"
-        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
-        log.debug("bu %s", self.base_url)
 
         # We could set connect and read timeouts
         # we could setup response hooks for caching
@@ -592,6 +585,7 @@ class Restlib(object):
         #self.session.verify = self.server_cert_info.ca_bundle
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
+
     # restlib should be api info, requestsSession connection info
     # give restlib a host/port and a requestsSession, and UepConnection can
     # assemble those
@@ -627,6 +621,8 @@ class Restlib(object):
                   response.status_code, response.headers.get('x-candepin-request-uuid') or '')
 
     def validate_response(self, response):
+        # if we keep Restlib generic, may make sense to pass in a validator
+        # or provide RhsmResponseValidator in a subclass
         validator = RhsmResponseValidator()
         validator.validate(response)
 
@@ -638,6 +634,7 @@ class Restlib(object):
 
     def _request_wrapper(self, verb, full_url, data=None):
         """Try to catch the case where we get TLS errors because of an expired cert."""
+        # FIXME: some sort of exception mapper/handler would be useful
         try:
             log.debug("self.session=%s", self.session)
             log.debug("full_url=%s verb=%s", full_url, verb)
@@ -881,6 +878,9 @@ class UEPConnection:
         # BZ848836
         self.handler = self.handler.rstrip("/")
 
+        # FIXME: Would make more sense to just pass in created
+        # proxyInfo/UserInfo/ClientCertInfo/ServerCertInfo so there
+        # aren't 20 init args that result in different things
         self.proxy_info = self._setup_proxy(proxy_hostname, proxy_port,
                                              proxy_user, proxy_password)
 
@@ -947,8 +947,6 @@ class UEPConnection:
             using_basic_auth = True
             auth = RhsmBasicAuth(user_auth_info=user_auth_info)
         elif client_cert_info:
-            #auth = RhsmClientCertAuth(self.cert_file, self.key_file)
-
             auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
             using_id_cert_auth = True
 
@@ -974,6 +972,12 @@ class UEPConnection:
                                _proxy_user, _proxy_password)
 
         return proxy_info
+
+    def shutDown(self):
+        self.conn.close()
+        log.info("remote connection closed")
+
+    # Everything below is the API and likely should be split
 
     def _load_supported_resources(self):
         """
@@ -1028,10 +1032,6 @@ class UEPConnection:
         if self.capabilities is None:
             self.capabilities = self._load_manager_capabilities()
         return capability in self.capabilities
-
-    def shutDown(self):
-        self.conn.close()
-        log.info("remote connection closed")
 
     def ping(self, username=None, password=None):
         return self.conn.request_get("/status/")
