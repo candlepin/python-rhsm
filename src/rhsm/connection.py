@@ -649,12 +649,15 @@ class Restlib(object):
         #        and causes str() to fail and that causes chaos
         except ssl.SSLError, e:
             raise RhsmSSLError(args=e.args)
+        # FIXME
         # FIXME: use underlying SSL errors
-        except Exception, e:
+        # FIXME
+        # FIXME:
+        #except Exception, e:
             #log.exception(e)
-            if self.client_cert_info:
-                self.client_cert_info.validate_cert()
-            raise ConnectionException()
+            #if self.sessiom.iclient_cert_info:
+            #self.client_cert_info.validate_cert()
+            #raise ConnectionException()
 
     # return request.Request objects
     def _requests_request(self, verb, method, data=None):
@@ -750,6 +753,16 @@ class RhsmAuth(requests.auth.AuthBase):
         self.log = logging.getLogger("%s.%s" % (__name__, type(self).__name__))
 
 
+class RhsmNoAuthAuth(RhsmAuth):
+    def __init__(self):
+        self.log = logging.getLogger("%s.%s" % (__name__, type(self).__name__))
+        self.log.debug("init of RhsmNoAuthAuth")
+
+    def __call__(self, r):
+        self.log.debug("RhsmNoAuth.call r=%s", r)
+        return r
+
+
 class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
     def __init__(self, user_auth_info):
         super(RhsmBasicAuth, self).__init__(user_auth_info.username,
@@ -760,7 +773,7 @@ class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
     def __call__(self, r):
         super(RhsmBasicAuth, self).__call__(r)
         r.headers["some-rhsm-header"] = "caneatcheese(1)=true"
-        self.log.debug("rhsmBasicAuth.call")
+        self.log.debug("rhsmBasicAuth.call r=%s", r)
         return r
 
 
@@ -771,11 +784,13 @@ class RhsmClientCertAuth(RhsmAuth):
         super(RhsmClientCertAuth, self).__init__()
         self.cert_file = client_cert_info.cert_file
         self.key_file = client_cert_info.key_file
+        self.log.debug("RhsmClientCert.__init__ self.cert_file=%s", self.cert_file)
 
     def __call__(self, r):
-        super(RhsmClientCertAuth, self).__call__(r)
         r.cert = (self.cert_file, self.key_file)
         self.log.debug("client cert auth %s %s", self.cert_file, self.key_file)
+        self.log.debug("RhsmClientCertAuth r=%s type=%s", r, type(r))
+        self.log.debug("dir(r) = %s", dir(r))
         return r
 
 
@@ -931,11 +946,16 @@ class UEPConnection:
         using_basic_auth = False
         using_id_cert_auth = False
 
-        auth = None
+        auth = RhsmNoAuthAuth()
+        log.debug("setup_auth user_auth_info=%s client_cert_info=%s",
+                  user_auth_info, client_cert_info)
+        log.debug("auth=%s", auth)
+
         if user_auth_info:
             using_basic_auth = True
             auth = RhsmBasicAuth(user_auth_info=user_auth_info)
-        elif client_cert_info:
+
+        if client_cert_info:
             auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
             using_id_cert_auth = True
 
