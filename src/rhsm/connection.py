@@ -553,39 +553,19 @@ class Restlib(object):
      See validateResponse() to learn when exceptions are raised as a result
      of communication with the server.
     """
-    def __init__(self, host, ssl_port, apihandler,
-                 session=None):
-        # FIXME: replace with baseurl, or just assume the passed
-        #        in session has a HttpAdapter that knows the url
-        log.debug("%s host=%s, ssl_port=%s, apihandler=%s, session=%s",
-                  self.__class__.__name__, host, ssl_port, apihandler, session)
-
-        self.host = host
-        self.ssl_port = ssl_port
-        self.apihandler = apihandler
-
+    def __init__(self, base_url, session):
         self.session = session
 
+        self.session.headers.update({"Content-type": "application/json",
+                                     "Accept": "application/json",
+                                     "x-python-rhsm-version": python_rhsm_version,
+                                     "x-subscription-manager-version": subman_version})
+
         lc = _get_locale()
-
-        self.headers = {"Content-type": "application/json",
-                        "Accept": "application/json",
-                        "x-python-rhsm-version": python_rhsm_version,
-                        "x-subscription-manager-version": subman_version}
-
         if lc:
-            self.headers["Accept-Language"] = lc.lower().replace('_', '-')
+            self.session.headers.update({"Accept-Language": lc.lower().replace('_', '-')})
 
-        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.apihandler)
-        log.debug("bu1 %s", self.base_url)
-
-        # We could set connect and read timeouts
-        # we could setup response hooks for caching
-
-        #self.session = requests.Session()
-        #self.session.mount('https://', MyAdapter())
-        #self.session.auth = self.auth
-        #self.session.verify = self.server_cert_info.ca_bundle
+        self.base_url = base_url
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
 
@@ -606,6 +586,7 @@ class Restlib(object):
 
         return json.loads(response_body, object_hook=JsonDecoder.decode_dict)
 
+    # FIXME: could be response registered hooks
     # can and will raise exceptions
     def check_response(self, response):
         self.log_response(response)
@@ -633,55 +614,31 @@ class Restlib(object):
 
     def full_url(self, url_fragment):
         # url join? candlepin is picky about extra /'s
-        return "%s%s" % (self.base_url, url_fragment)
-
-    def _request_wrapper(self, verb, full_url, data=None):
-        """Try to catch the case where we get TLS errors because of an expired cert."""
-        # FIXME: some sort of exception mapper/handler would be useful
-        try:
-            log.debug("self.session=%s", self.session)
-            log.debug("full_url=%s verb=%s", full_url, verb)
-            log.debug("self.session.request=%s %s", self.session.request, dir(self.session.request))
-            request = self.session.request(verb, full_url, data=data)
-            log.debug("wrapper ession=%s dir=%s", request, dir(request))
-            return request
-        # FIXME: for reasons unknown, ssl.SSLError.message is not a string and
-        #        and causes str() to fail and that causes chaos
-        except ssl.SSLError, e:
-            raise RhsmSSLError(args=e.args)
-        # FIXME
-        # FIXME: use underlying SSL errors
-        # FIXME
-        # FIXME:
-        #except Exception, e:
-            #log.exception(e)
-            #if self.sessiom.iclient_cert_info:
-            #self.client_cert_info.validate_cert()
-            #raise ConnectionException()
-
-    # return request.Request objects
-    def _requests_request(self, verb, method, data=None):
-        full_url = self.full_url(method)
-        log.debug("requests_request %s", full_url)
-        return self._request_wrapper(verb, full_url, data=data)
+        #full_url = urlparse.urljoin(self.base_url, url_fragment)
+        # handler in base_url does not have a trailing slash, but
+        # path url_fragements should if thy need it.
+        full_url = "%s%s" % (self.base_url, url_fragment)
+        log.debug("full_url: %s", full_url)
+        return full_url
 
     # return text
-    def get(self, method):
-        log.debug("get method %s session.auth=%s", method, self.session.auth)
-        #r = self._requests_request(verb='GET', method=method)
-        r = self.session.get(self.full_url(method))
+    def get(self, url):
+        log.debug("get url %s session.auth=%s", url, self.session.auth)
+        r = self.session.get(url)
+        # TODO: maybe a raw response validate and a json validate?
+        # check_response coulds/should be a 'response' hook
         self.check_response(r)
         return r.text
 
     # return objects
     def request_get(self, method):
         log.debug("request_get=%s", method)
-        response_body = self.get(method)
+        response_body = self.get(self.full_url(method))
         return self.json_loads(response_body)
 
     # returns the body of the content or raises exceptions
-    def post(self, method, data=None):
-        r = self._requests_request(verb='POST', method=method, data=data)
+    def post(self, url, data=None):
+        r = self.session.post(url, data=data)
         self.check_response(r)
         return r.text
 
@@ -689,12 +646,14 @@ class Restlib(object):
     def request_post(self, method, params=None):
         # params is dict to be serialized to json
         data = self.json_dumps(params)
-        response_body = self.post(method, data=data)
+        response_body = self.post(self.full_url(method),
+                                  data=data)
         return self.json_loads(response_body)
 
     # returns the body of the content or raises exceptions
-    def put(self, method, data=None):
-        r = self._requests_request(verb='PUT', method=method, data=data)
+    def put(self, url, data=None):
+        #r = self._requests_request(verb='PUT', method=method, data=data)
+        r = self.session.put(url, data=data)
         self.check_response(r)
         return r.text
 
@@ -702,27 +661,29 @@ class Restlib(object):
     def request_put(self, method, params=None):
         # params is dict to be serialized to json
         data = self.json_dumps(params)
-        response_body = self.put(method, data=data)
+        response_body = self.put(self.full_url(method),
+                                 data=data)
         return self.json_loads(response_body)
 
     # return text
-    def head(self, method):
-        r = self._requests_request(verb='HEAD', method=method)
+    def head(self, url):
+        r = self.session.head(url)
         self.check_response(r)
         return r.text
 
     def request_head(self, method):
-        response_body = self.get(method)
+        response_body = self.head(self.full_url(method))
         return self.json_loads(response_body)
 
-    def delete(self, method, data=None):
-        r = self._requests_request(verb='DELETE', method=method, data=data)
+    def delete(self, url, data=None):
+        r = self.session.delete(url, data=data)
         self.check_response(r)
         return r.text
 
     def request_delete(self, method, params=None):
         data = self.json_dumps(params)
-        response_body = self.delete(method, data=data)
+        response_body = self.delete(self.full_url(method),
+                                    data=data)
         return self.json_loads(response_body)
 
 
@@ -845,6 +806,12 @@ class RhsmPlainHttpsAuth(RhsmAuth):
         return r
 
 
+class RhsmConnection(object):
+    def __init__(self, session):
+        # ? Restlib arg?
+        self.session = session
+
+
 # FIXME: there should probably be a class here for just
 # the connection bits, then a sub class for the api
 # stuff
@@ -907,6 +874,7 @@ class UEPConnection:
         self.auth = self._setup_auth(user_auth_info=user_auth_info,
                                      client_cert_info=client_cert_info)
 
+        # Session for each auth type (no_auth, basic_auth, client_cert_auth)
         self.session_factory = RequestsSessionFactory(auth=self.auth,
                                                       server_cert_info=server_cert_info,
                                                       #client_cert_info=self.client_cert_info,
@@ -914,10 +882,20 @@ class UEPConnection:
 
         self.session = self.session_factory.session
 
-        self.conn = Restlib(self.host, self.ssl_port, self.handler,
+        # prefix/handler needs to start with leading /
+        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.handler)
+        log.debug("bu %s", self.base_url)
+        # Could ditch the instance of Restlib and pass the session around as needed
+        self.conn = Restlib(self.base_url,
                             session=self.session)
 
+        # already create three Uep Connections, might as well make that explicit
+        # and have a class for each. Then don't really need the session_factory
         self.resources = None
+
+        # TODO: is our use of the URL generally specific to one type of auth?
+        #       ie, could we use an HttpAdapter? Likely not since admin basic auth
+        #       can hit anything, and consumer cert can also act as owner auth
 
     def _setup_server_cert_info(self, insecure=False):
 
