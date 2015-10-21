@@ -25,6 +25,7 @@ import ssl
 import sys
 import urllib
 import urllib3
+import warnings
 
 import requests
 import requests.exceptions
@@ -49,6 +50,8 @@ from rhsm.utils import get_env_proxy_info
 
 global_socket_timeout = 60
 timeout_altered = None
+
+warnings.simplefilter('ignore', urllib3.exceptions.SecurityWarning)
 
 
 def set_default_socket_timeout_if_python_2_3():
