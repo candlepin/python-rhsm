@@ -24,6 +24,7 @@ import socket
 import ssl
 import sys
 import urllib
+import urllib3
 
 import requests
 import requests.exceptions
@@ -211,6 +212,7 @@ class RemoteServerException(ConnectionException):
         return "Server returned %s" % self.code
 
 
+
 class AuthenticationException(RemoteServerException):
     prefix = "Authentication error"
 
@@ -347,6 +349,12 @@ class RhsmResponseValidator(object):
             self.raise_exception_based_on_just_status_code(response)
             return
 
+        if status_code == 429:
+            raise RateLimitExceededException(status_code,
+                                             request_type=response.request.method,
+                                             handler=response.request.path_url,
+                                             response=response)
+
         # see if we have been deleted and hit a 410
         self.check_for_gone(status_code, parsed_response)
 
@@ -373,7 +381,8 @@ class RhsmResponseValidator(object):
                                 parsed_response['deletedId'])
 
     def raise_exception_based_on_just_status_code(self, response):
-        # This really needs an exception mapper too...
+        # This really needs an exception mapper too.
+        # TODO: Can we make better use of Response.raise_for_status() here?
         status_code = response.status_code
         request_type = response.request.method
         handler = response.request.path_url
@@ -390,8 +399,11 @@ class RhsmResponseValidator(object):
             raise ForbiddenException(status_code,
                                      request_type=request_type,
                                      handler=handler)
-#        elif status code in [429]:
-#            raise RateLimitExceededException(status_code)
+        elif status_code in [429]:
+            raise RateLimitExceededException(status_code,
+                                             request_type=request_type,
+                                             handler=handler,
+                                             response=response)
 
         else:
             # unexpected with no valid content
@@ -509,11 +521,15 @@ class ServerCertInfo(object):
         return server_cert_info
 
 
-# At the moment, this API only supports blocking requests
-# split into RhsmSession(requests.Session) and Restlib
-# RhsmSession -> auth/etc and caps/versions
-# Restlib -> our .get/.post that return the results (and not a Response object)
-#     (though, maybe subman should learn to expect a Response object...)
+class RhsmTLSAdapter(requests.adapters.HTTPAdapter):
+    ssl_version = ssl.PROTOCOL_SSLv23
+
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = urllib3.poolmanager.PoolManager(num_pools=connections,
+                                                           maxsize=maxsize,
+                                                           block=block,
+                                                           ssl_version=self.ssl_version)
+
 
 class RhsmSession(requests.Session):
     def __init__(self, *args, **kwargs):
@@ -548,13 +564,20 @@ class RhsmSessionFactory(object):
     def __init__(self, auth=None, server_cert_info=None,
                 client_cert_info=None, proxy_info=None):
 
+        #import traceback
+        #traceback.print_stack()
+        #log.debug("%s", traceback.format_stack())
         session = RhsmSession()
         session = self.setup_proxy(session, proxy_info)
         session = self.setup_server_cert_verify(session, server_cert_info)
-        session = self.setup_auth(session, auth)
+        if client_cert_info:
+            session = self.setup_client_cert_info(session, client_cert_info)
+        else:
+            session = self.setup_auth(session, auth)
         # Use an HttpAdaptor and overrides it's cert_verify
         #  ... then we could map specific url subpaths to different auth setups
         #      ie, /consumers is consumer cert while and /status are Plain https
+        session.mount('https://', RhsmTLSAdapter())
         self.session = session
         log.debug("session %s", session)
 
@@ -586,6 +609,14 @@ class RhsmSessionFactory(object):
 
         # verify depth
         log.debug("session=%s verify=%s", session, session.verify)
+        return session
+
+    def setup_client_cert_info(self, session, client_cert_info):
+        session.cert = (client_cert_info.cert_file,
+                        client_cert_info.key_file)
+
+        log.debug("client cert %s", client_cert_info)
+        log.debug("session.cert=%s", session.cert)
         return session
 
 
@@ -694,6 +725,8 @@ class RhsmRestlib(object):
         log.debug("request headers %s", response.request.headers)
         log.debug("Response: status=%s requestUuid=%s",
                   response.status_code, response.headers.get('x-candepin-request-uuid') or '')
+        log.debug("self.session.auth=%s", self.session.auth)
+        log.debug("self.session.cert=%s", self.session.cert)
 
     def validate_response(self, response):
         # if we keep Restlib generic, may make sense to pass in a validator
@@ -791,23 +824,6 @@ class RhsmBasicAuth(requests.auth.HTTPBasicAuth):
         return r
 
 
-class RhsmClientCertAuth(RhsmAuth):
-    has_client_cert = True
-
-    def __init__(self, client_cert_info):
-        super(RhsmClientCertAuth, self).__init__()
-        self.cert_file = client_cert_info.cert_file
-        self.key_file = client_cert_info.key_file
-        self.log.debug("RhsmClientCert.__init__ self.cert_file=%s", self.cert_file)
-
-    def __call__(self, r):
-        r.cert = (self.cert_file, self.key_file)
-        self.log.debug("client cert auth %s %s", self.cert_file, self.key_file)
-        self.log.debug("RhsmClientCertAuth r=%s type=%s", r, type(r))
-        self.log.debug("dir(r) = %s", dir(r))
-        return r
-
-
 class RhsmEntitlementCertAuth(RhsmAuth):
     ent_dir = "/etc/pki/entitlement"
 
@@ -873,7 +889,6 @@ def rhsm_auth_factory(username, password, cert_file, key_file):
         auth = RhsmBasicAuth(user_auth_info=user_auth_info)
 
     if client_cert_info:
-        auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
         using_id_cert_auth = True
 
     if using_basic_auth and using_id_cert_auth:
@@ -1522,11 +1537,14 @@ class UEPConnection(RhsmConnection):
                                                          proxy_user, proxy_password,
                                                          config)
 
-        self.capabilities = None
-
         # TODO: do we use the insecure arg here?
         server_cert_info = ServerCertInfo.from_config(config=config,
                                                       insecure=insecure)
+
+        client_cert_info = None
+        if cert_file and key_file:
+            client_cert_info = ClientCertInfo(cert_file=cert_file,
+                                              key_file=key_file)
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
@@ -1535,7 +1553,7 @@ class UEPConnection(RhsmConnection):
         # Session for each auth type (no_auth, basic_auth, client_cert_auth)
         self.session_factory = RhsmSessionFactory(auth=self.auth,
                                                   server_cert_info=server_cert_info,
-                                                  #client_cert_info=self.client_cert_info,
+                                                  client_cert_info=client_cert_info,
                                                   proxy_info=self.proxy_info)
 
         self.session = self.session_factory.session
