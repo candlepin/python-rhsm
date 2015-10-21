@@ -97,7 +97,7 @@ config = initConfig()
 
 def drift_check(utc_time_string, hours=1):
     """
-    Takes in a RFC 1123 date and returns True if the currnet time
+    Takes in a RFC 1123 date and returns True if the current time
     is greater then the supplied number of hours
     """
     drift = False
@@ -533,6 +533,8 @@ class RhsmSession(requests.Session):
         self.capabilities = None
         self.resources = None
 
+        self.drift_checked = None
+
 
 # could be RhsmSession classmethods or dedicated subclasses
 class RhsmSessionFactory(object):
@@ -546,19 +548,15 @@ class RhsmSessionFactory(object):
     def __init__(self, auth=None, server_cert_info=None,
                 client_cert_info=None, proxy_info=None):
 
-        session = self.create_session()
+        session = RhsmSession()
         session = self.setup_proxy(session, proxy_info)
         session = self.setup_server_cert_verify(session, server_cert_info)
-        #session = self.setup_client_cert_auth(session, client_cert_info)
         session = self.setup_auth(session, auth)
         # Use an HttpAdaptor and overrides it's cert_verify
         #  ... then we could map specific url subpaths to different auth setups
         #      ie, /consumers is consumer cert while and /status are Plain https
         self.session = session
         log.debug("session %s", session)
-
-    def create_session(self):
-        return RhsmSession()
 
     def setup_proxy(self, session, proxy_info):
         if not proxy_info:
@@ -574,14 +572,6 @@ class RhsmSessionFactory(object):
         session.auth = auth
         log.debug("session.auth = %s", session.auth)
         log.debug("auth = %s", auth)
-        return session
-
-    def setup_client_cert_auth(self, session, client_cert_info):
-        if not client_cert_info:
-            return session
-
-        session.cert = client_cert_info.cert_pair
-        log.debug("session.cert=%s", session.cert)
         return session
 
     def setup_server_cert_verify(self, session, server_cert_info):
@@ -611,11 +601,16 @@ class RhsmRestlib(object):
         self.base_url = base_url
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
+
+        self.validator = RhsmResponseValidator()
         self.session.hooks = {'response': self.check_response}
 
     # FIXME: do we need to provide compat for validateResponse?
     def check_response(self, response, **kwargs):
         log.debug("check_response response=%s kwargs=%s", response, kwargs)
+        self.log_response(response)
+        self.drift_check(response)
+        self.validate_response(response)
         return response
 
     def full_url(self, url_fragment):
@@ -626,6 +621,17 @@ class RhsmRestlib(object):
         full_url = "%s%s" % (self.base_url, url_fragment)
         log.debug("full_url: %s", full_url)
         return full_url
+
+    def request(self, url, **kwargs):
+        # Note, request's 'method' arg is the http method ('GET', etc)
+        # where we usually use that to mean the REST api slug ('/candlepin/consumers/release')
+        # so we use sub_url here to attempt to avoid confusion
+        verb = kwargs.pop('verb', 'GET')
+        r = self.session.request(method=verb,
+                                 url=url,
+                                 **kwargs)
+        self.check_response(r)
+        return r.text
 
     # return text
     def get(self, url):
@@ -673,18 +679,14 @@ class RhsmRestlib(object):
 
         return json.loads(response_body, object_hook=JsonDecoder.decode_dict)
 
-    # FIXME: _response checks (and our json_ methods) are about the
-    #        only RHSM specific stuf code here, could be split
-    # FIXME: could be response registered hooks
-    # can and will raise exceptions
-    def old_check_response(self, response, **kwargs):
-        self.log_response(response)
-        self.drift_check(response)
-        self.validate_response(response)
-
     # FIXME: should be able to move this to just per session
     def drift_check(self, response):
         # Look for server drift, and log a warning
+
+        # Already checked for this session
+        if self.session.drift_checked:
+            return
+
         if drift_check(response.headers.get('date')):
             log.warn("Clock skew detected, please check your system time")
 
@@ -696,8 +698,13 @@ class RhsmRestlib(object):
     def validate_response(self, response):
         # if we keep Restlib generic, may make sense to pass in a validator
         # or provide RhsmResponseValidator in a subclass
-        validator = RhsmResponseValidator()
-        validator.validate(response)
+        return self.validator.validate(response)
+
+    # The name... self.request is plain wrapper to requests.Session.request that returns
+    # txt. This returns python objects. Use self.request() if you need the Response object
+    def request_request(self, sub_url, **kwargs):
+        response_body = self.request(self.full_url(sub_url), **kwargs)
+        return self.json_loads(response_body)
 
     # return objects
     def request_get(self, method):
@@ -841,6 +848,42 @@ class RhsmEntitlementCertAuth(RhsmAuth):
         return cert_file.endswith(".pem") and not cert_file.endswith("-key.pem")
 
 
+def rhsm_auth_factory(username, password, cert_file, key_file):
+    # This is used by UepConnection for backswarfs compat, since it's
+    # init was basically this.
+    # A null version of these objects would be useful
+    client_cert_info = None
+    if cert_file and key_file:
+        client_cert_info = ClientCertInfo(cert_file, key_file)
+
+    user_auth_info = None
+    if username and password:
+        user_auth_info = UserAuthInfo(username=username,
+                                      password=password)
+    using_basic_auth = False
+    using_id_cert_auth = False
+
+    auth = RhsmNoAuthAuth()
+    log.debug("setup_auth user_auth_info=%s client_cert_info=%s",
+                user_auth_info, client_cert_info)
+    log.debug("auth=%s", auth)
+
+    if user_auth_info:
+        using_basic_auth = True
+        auth = RhsmBasicAuth(user_auth_info=user_auth_info)
+
+    if client_cert_info:
+        auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
+        using_id_cert_auth = True
+
+    if using_basic_auth and using_id_cert_auth:
+        raise Exception("Cannot specify both username/password and "
+                        "cert_file/key_file")
+
+    # initialize connection
+    return auth
+
+
 class RhsmConnection(object):
     def __init__(self, baseurl, session):
         # ? Restlib arg?
@@ -959,15 +1002,16 @@ class RhsmConnection(object):
 
         """
         if (self.has_capability("hypervisors_async")):
-            pass
+            #pass
             # FIXME:
             #           priorContentType = self.conn.headers['Content-type']
             #           self.conn.headers['Content-type'] = 'text/plain'
-            #           query_params = urlencode({"env": env, "cloaked": False})
-            #           url = "/hypervisors/%s?%s" % (owner, query_params)
-            #           res = self.conn.request_post(url, host_guest_mapping)
+            query_params = urlencode({"env": env, "cloaked": False})
+            url = "/hypervisors/%s?%s" % (owner, query_params)
+            res = self.conn.request_post(url, host_guest_mapping)
+            return res
             #           self.conn.headers['Content-type'] = priorContentType
-            raise Exception("adrian hasn't fixed this yet")
+            #raise Exception("adrian hasn't fixed this yet")
         else:
             # fall back to original report api
             # this results in the same json as in the result_data field
@@ -1478,16 +1522,6 @@ class UEPConnection(RhsmConnection):
                                                          proxy_user, proxy_password,
                                                          config)
 
-        # A null version of these objects would be useful
-        client_cert_info = None
-        if cert_file and key_file:
-            client_cert_info = ClientCertInfo(cert_file, key_file)
-
-        user_auth_info = None
-        if username and password:
-            user_auth_info = UserAuthInfo(username=username,
-                                          password=password)
-
         self.capabilities = None
 
         # TODO: do we use the insecure arg here?
@@ -1496,8 +1530,7 @@ class UEPConnection(RhsmConnection):
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
-        self.auth = self._setup_auth(user_auth_info=user_auth_info,
-                                     client_cert_info=client_cert_info)
+        self.auth = rhsm_auth_factory(username, password, cert_file, key_file)
 
         # Session for each auth type (no_auth, basic_auth, client_cert_auth)
         self.session_factory = RhsmSessionFactory(auth=self.auth,
@@ -1510,38 +1543,11 @@ class UEPConnection(RhsmConnection):
         # prefix/handler needs to start with leading /
         self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.handler)
         log.debug("bu %s", self.base_url)
+
         # Could ditch the instance of Restlib and pass the session around as needed
         self.conn = RhsmRestlib(self.base_url,
                                 session=self.session)
 
-        # already create three Uep Connections, might as well make that explicit
-        # and have a class for each. Then don't really need the session_factory
-        self.resources = None
-
         # TODO: is our use of the URL generally specific to one type of auth?
         #       ie, could we use an HttpAdapter? Likely not since admin basic auth
         #       can hit anything, and consumer cert can also act as owner auth
-
-    def _setup_auth(self, user_auth_info=None, client_cert_info=None):
-        using_basic_auth = False
-        using_id_cert_auth = False
-
-        auth = RhsmNoAuthAuth()
-        log.debug("setup_auth user_auth_info=%s client_cert_info=%s",
-                  user_auth_info, client_cert_info)
-        log.debug("auth=%s", auth)
-
-        if user_auth_info:
-            using_basic_auth = True
-            auth = RhsmBasicAuth(user_auth_info=user_auth_info)
-
-        if client_cert_info:
-            auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
-            using_id_cert_auth = True
-
-        if using_basic_auth and using_id_cert_auth:
-            raise Exception("Cannot specify both username/password and "
-                    "cert_file/key_file")
-
-        # initialize connection
-        return auth
