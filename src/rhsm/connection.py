@@ -470,7 +470,33 @@ class ServerCertInfo(object):
         self.insecure = insecure
 
 
-class RequestsSessionFactory(object):
+# At the moment, this API only supports blocking requests
+# split into RhsmSession(requests.Session) and Restlib
+# RhsmSession -> auth/etc and caps/versions
+# Restlib -> our .get/.post that return the results (and not a Response object)
+#     (though, maybe subman should learn to expect a Response object...)
+
+class RhsmSession(requests.Session):
+    def __init__(self, *args, **kwargs):
+        super(RhsmSession, self).__init__(*args, **kwargs)
+
+        self.headers.update({"Content-type": "application/json",
+                             "Accept": "application/json",
+                             "x-python-rhsm-version": python_rhsm_version,
+                             "x-subscription-manager-version": subman_version})
+
+        # move to kwarg
+        lc = _get_locale()
+        if lc:
+            self.headers.update({"Accept-Language": lc.lower().replace('_', '-')})
+
+        # TODO: move to classes, with reset/clean/update
+        self.capabilities = None
+        self.resources = None
+
+
+# could be RhsmSession classmethods or dedicated subclasses
+class RhsmSessionFactory(object):
     @classmethod
     def https_no_auth(cls, auth=None,
                       server_cert_info=None,
@@ -493,7 +519,7 @@ class RequestsSessionFactory(object):
         log.debug("session %s", session)
 
     def create_session(self):
-        return requests.Session()
+        return RhsmSession()
 
     def setup_proxy(self, session, proxy_info):
         if not proxy_info:
@@ -534,20 +560,7 @@ class RequestsSessionFactory(object):
         return session
 
 
-class RhsmHTTPAdapter(requests.adapters.HTTPAdapter):
-    pass
-
-
-class MyAdapter(requests.adapters.HTTPAdapter):
-    def init_poolmanager(self, connections, maxsize, block=False):
-        self.poolmanager = PoolManager(num_pools=connections,
-                                       maxsize=maxsize,
-                                       block=block,
-                                       ssl_version=ssl.PROTOCOL_SSLv23)
-
-
-# At the moment, this API only supports blocking requests
-class Restlib(object):
+class RhsmRestlib(object):
     """
      A wrapper around httplib to make rest calls easier
      See validateResponse() to learn when exceptions are raised as a result
@@ -556,22 +569,57 @@ class Restlib(object):
     def __init__(self, base_url, session):
         self.session = session
 
-        self.session.headers.update({"Content-type": "application/json",
-                                     "Accept": "application/json",
-                                     "x-python-rhsm-version": python_rhsm_version,
-                                     "x-subscription-manager-version": subman_version})
-
-        lc = _get_locale()
-        if lc:
-            self.session.headers.update({"Accept-Language": lc.lower().replace('_', '-')})
-
         self.base_url = base_url
         log.debug("self.base_url=%s", self.base_url)
         log.debug("self.session %s", self.session)
+        self.session.hooks = {'response': self.check_response}
 
-    # restlib should be api info, requestsSession connection info
-    # give restlib a host/port and a requestsSession, and UepConnection can
-    # assemble those
+    # FIXME: do we need to provide compat for validateResponse?
+    def check_response(self, response, **kwargs):
+        log.debug("check_response response=%s kwargs=%s", response, kwargs)
+        return response
+
+    def full_url(self, url_fragment):
+        # url join? candlepin is picky about extra /'s
+        #full_url = urlparse.urljoin(self.base_url, url_fragment)
+        # handler in base_url does not have a trailing slash, but
+        # path url_fragements should if thy need it.
+        full_url = "%s%s" % (self.base_url, url_fragment)
+        log.debug("full_url: %s", full_url)
+        return full_url
+
+    # return text
+    def get(self, url):
+        log.debug("get url %s session.auth=%s", url, self.session.auth)
+        r = self.session.get(url)
+        # TODO: maybe a raw response validate and a json validate?
+        # check_response coulds/should be a 'response' hook
+        self.check_response(r)
+        return r.text
+
+    # returns the body of the content or raises exceptions
+    def post(self, url, data=None):
+        r = self.session.post(url, data=data)
+        self.check_response(r)
+        return r.text
+
+    # returns the body of the content or raises exceptions
+    def put(self, url, data=None):
+        #r = self._requests_request(verb='PUT', method=method, data=data)
+        r = self.session.put(url, data=data)
+        self.check_response(r)
+        return r.text
+
+    # return text
+    def head(self, url):
+        r = self.session.head(url)
+        self.check_response(r)
+        return r.text
+
+    def delete(self, url, data=None):
+        r = self.session.delete(url, data=data)
+        self.check_response(r)
+        return r.text
 
     def json_dumps(self, info=None):
         data = None
@@ -586,9 +634,11 @@ class Restlib(object):
 
         return json.loads(response_body, object_hook=JsonDecoder.decode_dict)
 
+    # FIXME: _response checks (and our json_ methods) are about the
+    #        only RHSM specific stuf code here, could be split
     # FIXME: could be response registered hooks
     # can and will raise exceptions
-    def check_response(self, response):
+    def old_check_response(self, response, **kwargs):
         self.log_response(response)
         self.drift_check(response)
         self.validate_response(response)
@@ -610,37 +660,11 @@ class Restlib(object):
         validator = RhsmResponseValidator()
         validator.validate(response)
 
-    # FIXME: do we need to provide compat for validateResponse?
-
-    def full_url(self, url_fragment):
-        # url join? candlepin is picky about extra /'s
-        #full_url = urlparse.urljoin(self.base_url, url_fragment)
-        # handler in base_url does not have a trailing slash, but
-        # path url_fragements should if thy need it.
-        full_url = "%s%s" % (self.base_url, url_fragment)
-        log.debug("full_url: %s", full_url)
-        return full_url
-
-    # return text
-    def get(self, url):
-        log.debug("get url %s session.auth=%s", url, self.session.auth)
-        r = self.session.get(url)
-        # TODO: maybe a raw response validate and a json validate?
-        # check_response coulds/should be a 'response' hook
-        self.check_response(r)
-        return r.text
-
     # return objects
     def request_get(self, method):
         log.debug("request_get=%s", method)
         response_body = self.get(self.full_url(method))
         return self.json_loads(response_body)
-
-    # returns the body of the content or raises exceptions
-    def post(self, url, data=None):
-        r = self.session.post(url, data=data)
-        self.check_response(r)
-        return r.text
 
     # takes in python objects and returns python objects
     def request_post(self, method, params=None):
@@ -650,13 +674,6 @@ class Restlib(object):
                                   data=data)
         return self.json_loads(response_body)
 
-    # returns the body of the content or raises exceptions
-    def put(self, url, data=None):
-        #r = self._requests_request(verb='PUT', method=method, data=data)
-        r = self.session.put(url, data=data)
-        self.check_response(r)
-        return r.text
-
     # takes in python objects and returns python objects
     def request_put(self, method, params=None):
         # params is dict to be serialized to json
@@ -665,20 +682,9 @@ class Restlib(object):
                                  data=data)
         return self.json_loads(response_body)
 
-    # return text
-    def head(self, url):
-        r = self.session.head(url)
-        self.check_response(r)
-        return r.text
-
     def request_head(self, method):
         response_body = self.head(self.full_url(method))
         return self.json_loads(response_body)
-
-    def delete(self, url, data=None):
-        r = self.session.delete(url, data=data)
-        self.check_response(r)
-        return r.text
 
     def request_delete(self, method, params=None):
         data = self.json_dumps(params)
@@ -688,7 +694,8 @@ class Restlib(object):
 
 
 # TODO: Needs to be a wrapper class for setting up auth/session for cdn access
-class EntitlementCertRestlib(Restlib):
+# This won'tt be a a Restlib subclass, likely just a request.Session with the right setup
+class EntitlementCertRestlib(RhsmRestlib):
     ent_dir = "/etc/pki/entitlement"
 
     def _setup_server_cert_verify(self):
@@ -795,176 +802,14 @@ class RhsmEntitlementCertAuth(RhsmAuth):
         return cert_file.endswith(".pem") and not cert_file.endswith("-key.pem")
 
 
-class RhsmPlainHttpsAuth(RhsmAuth):
-    verify = True
-
-    def __call__(self, r):
-        super(RhsmPlainHttpsAuth, self).__call__(r)
-        # default to verify
-        # verify is a 3 value boolean, True, False, or a ca_bundle path
-        r.verify = self.verify
-        return r
-
-
 class RhsmConnection(object):
-    def __init__(self, session):
+    def __init__(self, baseurl, session):
         # ? Restlib arg?
-        self.session = session
-
-
-# FIXME: there should probably be a class here for just
-# the connection bits, then a sub class for the api
-# stuff
-class UEPConnection:
-    """
-    Class for communicating with the REST interface of a Red Hat Unified
-    Entitlement Platform.
-    """
-
-    def __init__(self,
-            host=None,
-            ssl_port=None,
-            handler=None,
-            proxy_hostname=None,
-            proxy_port=None,
-            proxy_user=None,
-            proxy_password=None,
-            username=None, password=None,
-            cert_file=None, key_file=None,
-            insecure=None):
-        """
-        Two ways to authenticate:
-            - username/password for HTTP basic authentication. (owner admin role)
-            - uuid/key_file/cert_file for identity cert authentication.
-              (consumer role)
-
-        Must specify one method of authentication or the other, not both.
-        """
-        self.host = host or config.get('server', 'hostname')
-        self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
-        self.handler = handler or config.get('server', 'prefix')
-
-        log.debug("HANDLER %s", self.handler)
-        # remove trailing "/" from the prefix if it is there
-        # BZ848836
-        self.handler = self.handler.rstrip("/")
-
-        # FIXME: Would make more sense to just pass in created
-        # proxyInfo/UserInfo/ClientCertInfo/ServerCertInfo so there
-        # aren't 20 init args that result in different things
-        self.proxy_info = self._setup_proxy(proxy_hostname, proxy_port,
-                                             proxy_user, proxy_password)
-
-        # A null version of these objects would be useful
-        client_cert_info = None
-        if cert_file and key_file:
-            client_cert_info = ClientCertInfo(cert_file, key_file)
-
-        user_auth_info = None
-        if username and password:
-            user_auth_info = UserAuthInfo(username=username,
-                                          password=password)
-
-        self.capabilities = None
-
-        server_cert_info = self._setup_server_cert_info(insecure=insecure)
-
-        # FIXME: replace with url url->auth mapper thing?
-        # initialize connection
-        self.auth = self._setup_auth(user_auth_info=user_auth_info,
-                                     client_cert_info=client_cert_info)
-
-        # Session for each auth type (no_auth, basic_auth, client_cert_auth)
-        self.session_factory = RequestsSessionFactory(auth=self.auth,
-                                                      server_cert_info=server_cert_info,
-                                                      #client_cert_info=self.client_cert_info,
-                                                      proxy_info=self.proxy_info)
-
-        self.session = self.session_factory.session
-
-        # prefix/handler needs to start with leading /
-        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.handler)
-        log.debug("bu %s", self.base_url)
-        # Could ditch the instance of Restlib and pass the session around as needed
-        self.conn = Restlib(self.base_url,
-                            session=self.session)
-
-        # already create three Uep Connections, might as well make that explicit
-        # and have a class for each. Then don't really need the session_factory
-        self.resources = None
-
-        # TODO: is our use of the URL generally specific to one type of auth?
-        #       ie, could we use an HttpAdapter? Likely not since admin basic auth
-        #       can hit anything, and consumer cert can also act as owner auth
-
-    def _setup_server_cert_info(self, insecure=False):
-
-        ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
-
-        if insecure is None:
-            insecure = False
-
-        config_insecure = safe_int(config.get('server', 'insecure'))
-        if config_insecure:
-            insecure = True
-
-        verify = not insecure
-
-        ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
-        ca_bundle = os.path.join(ca_cert_dir, 'ca_bundle.pem')
-        log.debug("ca_bundle=%s", ca_bundle)
-
-        server_cert_info = ServerCertInfo(ca_bundle=ca_bundle,
-                                          verify=verify,
-                                          verify_depth=ssl_verify_depth,
-                                          insecure=insecure)
-        return server_cert_info
-
-    def _setup_auth(self, user_auth_info=None, client_cert_info=None):
-        using_basic_auth = False
-        using_id_cert_auth = False
-
-        auth = RhsmNoAuthAuth()
-        log.debug("setup_auth user_auth_info=%s client_cert_info=%s",
-                  user_auth_info, client_cert_info)
-        log.debug("auth=%s", auth)
-
-        if user_auth_info:
-            using_basic_auth = True
-            auth = RhsmBasicAuth(user_auth_info=user_auth_info)
-
-        if client_cert_info:
-            auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
-            using_id_cert_auth = True
-
-        if using_basic_auth and using_id_cert_auth:
-            raise Exception("Cannot specify both username/password and "
-                    "cert_file/key_file")
-
-        # initialize connection
-        return auth
-
-    def _setup_proxy(self, proxy_hostname, proxy_port, proxy_user, proxy_password):
-
-        # get the proxy information from the environment variable
-        # if available
-        info = get_env_proxy_info()
-
-        _proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
-        _proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
-        _proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
-        _proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
-
-        proxy_info = ProxyInfo(_proxy_hostname, _proxy_port,
-                               _proxy_user, _proxy_password)
-
-        return proxy_info
+        self.conn = RhsmRestlib(baseurl, session)
 
     def shutDown(self):
         self.conn.close()
         log.info("remote connection closed")
-
-    # Everything below is the API and likely should be split
 
     def _load_supported_resources(self):
         """
@@ -976,23 +821,13 @@ class UEPConnection:
         replaced later) If something goes wrong making this request, just
         leave the list of supported resources empty.
         """
-        self.resources = {}
+        resources = {}
         resources_list = self.conn.request_get("/")
         for r in resources_list:
-            self.resources[r['rel']] = r['href']
+            resources[r['rel']] = r['href']
         log.debug("Server supports the following resources: %s",
-                  self.resources)
-
-    def supports_resource(self, resource_name):
-        """
-        Check if the server we're connecting too supports a particular
-        resource. For our use cases this is generally the plural form
-        of the resource.
-        """
-        if self.resources is None:
-            self._load_supported_resources()
-
-        return resource_name in self.resources
+                  resources)
+        return resources
 
     def _load_manager_capabilities(self):
         """
@@ -1016,9 +851,20 @@ class UEPConnection:
         """
         Check if the server we're connected to has a particular capability.
         """
-        if self.capabilities is None:
-            self.capabilities = self._load_manager_capabilities()
-        return capability in self.capabilities
+        if self.session.capabilities is None:
+            self.session.capabilities = self._load_manager_capabilities()
+        return capability in self.session.capabilities
+
+    def supports_resource(self, resource_name):
+        """
+        Check if the server we're connecting too supports a particular
+        resource. For our use cases this is generally the plural form
+        of the resource.
+        """
+        if self.session.resources is None:
+            self.session.resources = self._load_supported_resources()
+
+        return resource_name in self.session.resources
 
     def ping(self, username=None, password=None):
         return self.conn.request_get("/status/")
@@ -1552,3 +1398,150 @@ class UEPConnection:
         else:
             sane_string = urllib.quote(str(url_param))
         return sane_string
+
+
+# TODO: this is 90% auth/session setup stuff
+class UEPConnection(RhsmConnection):
+    """
+    Class for communicating with the REST interface of a Red Hat Unified
+    Entitlement Platform.
+    """
+
+    def __init__(self,
+            host=None,
+            ssl_port=None,
+            handler=None,
+            proxy_hostname=None,
+            proxy_port=None,
+            proxy_user=None,
+            proxy_password=None,
+            username=None, password=None,
+            cert_file=None, key_file=None,
+            insecure=None):
+        """
+        Two ways to authenticate:
+            - username/password for HTTP basic authentication. (owner admin role)
+            - uuid/key_file/cert_file for identity cert authentication.
+              (consumer role)
+
+        Must specify one method of authentication or the other, not both.
+        """
+        self.host = host or config.get('server', 'hostname')
+        self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
+        self.handler = handler or config.get('server', 'prefix')
+
+        log.debug("HANDLER %s", self.handler)
+        # remove trailing "/" from the prefix if it is there
+        # BZ848836
+        self.handler = self.handler.rstrip("/")
+
+        # FIXME: Would make more sense to just pass in created
+        # proxyInfo/UserInfo/ClientCertInfo/ServerCertInfo so there
+        # aren't 20 init args that result in different things
+        self.proxy_info = self._setup_proxy(proxy_hostname, proxy_port,
+                                             proxy_user, proxy_password)
+
+        # A null version of these objects would be useful
+        client_cert_info = None
+        if cert_file and key_file:
+            client_cert_info = ClientCertInfo(cert_file, key_file)
+
+        user_auth_info = None
+        if username and password:
+            user_auth_info = UserAuthInfo(username=username,
+                                          password=password)
+
+        self.capabilities = None
+
+        server_cert_info = self._setup_server_cert_info(insecure=insecure)
+
+        # FIXME: replace with url url->auth mapper thing?
+        # initialize connection
+        self.auth = self._setup_auth(user_auth_info=user_auth_info,
+                                     client_cert_info=client_cert_info)
+
+        # Session for each auth type (no_auth, basic_auth, client_cert_auth)
+        self.session_factory = RhsmSessionFactory(auth=self.auth,
+                                                  server_cert_info=server_cert_info,
+                                                  #client_cert_info=self.client_cert_info,
+                                                  proxy_info=self.proxy_info)
+
+        self.session = self.session_factory.session
+
+        # prefix/handler needs to start with leading /
+        self.base_url = "https://%s:%s%s" % (self.host, self.ssl_port, self.handler)
+        log.debug("bu %s", self.base_url)
+        # Could ditch the instance of Restlib and pass the session around as needed
+        self.conn = RhsmRestlib(self.base_url,
+                                session=self.session)
+
+        # already create three Uep Connections, might as well make that explicit
+        # and have a class for each. Then don't really need the session_factory
+        self.resources = None
+
+        # TODO: is our use of the URL generally specific to one type of auth?
+        #       ie, could we use an HttpAdapter? Likely not since admin basic auth
+        #       can hit anything, and consumer cert can also act as owner auth
+
+    def _setup_server_cert_info(self, insecure=False):
+
+        ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
+
+        if insecure is None:
+            insecure = False
+
+        config_insecure = safe_int(config.get('server', 'insecure'))
+        if config_insecure:
+            insecure = True
+
+        verify = not insecure
+
+        ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
+        ca_bundle = os.path.join(ca_cert_dir, 'ca_bundle.pem')
+        log.debug("ca_bundle=%s", ca_bundle)
+
+        server_cert_info = ServerCertInfo(ca_bundle=ca_bundle,
+                                          verify=verify,
+                                          verify_depth=ssl_verify_depth,
+                                          insecure=insecure)
+        return server_cert_info
+
+    def _setup_auth(self, user_auth_info=None, client_cert_info=None):
+        using_basic_auth = False
+        using_id_cert_auth = False
+
+        auth = RhsmNoAuthAuth()
+        log.debug("setup_auth user_auth_info=%s client_cert_info=%s",
+                  user_auth_info, client_cert_info)
+        log.debug("auth=%s", auth)
+
+        if user_auth_info:
+            using_basic_auth = True
+            auth = RhsmBasicAuth(user_auth_info=user_auth_info)
+
+        if client_cert_info:
+            auth = RhsmClientCertAuth(client_cert_info=client_cert_info)
+            using_id_cert_auth = True
+
+        if using_basic_auth and using_id_cert_auth:
+            raise Exception("Cannot specify both username/password and "
+                    "cert_file/key_file")
+
+        # initialize connection
+        return auth
+
+    def _setup_proxy(self, proxy_hostname, proxy_port, proxy_user, proxy_password):
+
+        # get the proxy information from the environment variable
+        # if available
+        info = get_env_proxy_info()
+
+        _proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
+        _proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
+        _proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
+        _proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
+
+        proxy_info = ProxyInfo(_proxy_hostname, _proxy_port,
+                               _proxy_user, _proxy_password)
+
+        return proxy_info
