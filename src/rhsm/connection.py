@@ -29,8 +29,6 @@ import requests
 import requests.exceptions
 import requests.adapters
 import requests.auth
-from requests.packages.urllib3.poolmanager import PoolManager
-
 
 from urllib import urlencode
 
@@ -437,6 +435,23 @@ class ProxyInfo(object):
         self.scheme_map = {'https': self.url,
                            'http': self.url}
 
+    @classmethod
+    def from_args_and_config(cls, proxy_hostname, proxy_port, proxy_user, proxy_password, config):
+        # get the proxy information from the environment variable
+        # if available
+        # Does requests/urllib3 do this?
+        info = get_env_proxy_info()
+
+        _proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
+        _proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
+        _proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
+        _proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
+
+        proxy_info = cls(_proxy_hostname, _proxy_port,
+                         _proxy_user, _proxy_password)
+
+        return proxy_info
+
 
 class UserAuthInfo(object):
     def __init__(self, username=None, password=None):
@@ -468,6 +483,30 @@ class ServerCertInfo(object):
         self.verify_depth = verify_depth or 3
         # Mostly for logging/reporting since verify is not quite ! insecure
         self.insecure = insecure
+
+    @classmethod
+    def from_config(cls, config, insecure=None):
+
+        ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
+
+        if insecure is None:
+            insecure = False
+
+        config_insecure = safe_int(config.get('server', 'insecure'))
+        if config_insecure:
+            insecure = True
+
+        verify = not insecure
+
+        ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
+        ca_bundle = os.path.join(ca_cert_dir, 'ca_bundle.pem')
+        log.debug("ca_bundle=%s", ca_bundle)
+
+        server_cert_info = cls(ca_bundle=ca_bundle,
+                               verify=verify,
+                               verify_depth=ssl_verify_depth,
+                               insecure=insecure)
+        return server_cert_info
 
 
 # At the moment, this API only supports blocking requests
@@ -1435,11 +1474,9 @@ class UEPConnection(RhsmConnection):
         # BZ848836
         self.handler = self.handler.rstrip("/")
 
-        # FIXME: Would make more sense to just pass in created
-        # proxyInfo/UserInfo/ClientCertInfo/ServerCertInfo so there
-        # aren't 20 init args that result in different things
-        self.proxy_info = self._setup_proxy(proxy_hostname, proxy_port,
-                                             proxy_user, proxy_password)
+        self.proxy_info = ProxyInfo.from_args_and_config(proxy_hostname, proxy_port,
+                                                         proxy_user, proxy_password,
+                                                         config)
 
         # A null version of these objects would be useful
         client_cert_info = None
@@ -1453,7 +1490,9 @@ class UEPConnection(RhsmConnection):
 
         self.capabilities = None
 
-        server_cert_info = self._setup_server_cert_info(insecure=insecure)
+        # TODO: do we use the insecure arg here?
+        server_cert_info = ServerCertInfo.from_config(config=config,
+                                                      insecure=insecure)
 
         # FIXME: replace with url url->auth mapper thing?
         # initialize connection
@@ -1483,29 +1522,6 @@ class UEPConnection(RhsmConnection):
         #       ie, could we use an HttpAdapter? Likely not since admin basic auth
         #       can hit anything, and consumer cert can also act as owner auth
 
-    def _setup_server_cert_info(self, insecure=False):
-
-        ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
-
-        if insecure is None:
-            insecure = False
-
-        config_insecure = safe_int(config.get('server', 'insecure'))
-        if config_insecure:
-            insecure = True
-
-        verify = not insecure
-
-        ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
-        ca_bundle = os.path.join(ca_cert_dir, 'ca_bundle.pem')
-        log.debug("ca_bundle=%s", ca_bundle)
-
-        server_cert_info = ServerCertInfo(ca_bundle=ca_bundle,
-                                          verify=verify,
-                                          verify_depth=ssl_verify_depth,
-                                          insecure=insecure)
-        return server_cert_info
-
     def _setup_auth(self, user_auth_info=None, client_cert_info=None):
         using_basic_auth = False
         using_id_cert_auth = False
@@ -1529,19 +1545,3 @@ class UEPConnection(RhsmConnection):
 
         # initialize connection
         return auth
-
-    def _setup_proxy(self, proxy_hostname, proxy_port, proxy_user, proxy_password):
-
-        # get the proxy information from the environment variable
-        # if available
-        info = get_env_proxy_info()
-
-        _proxy_hostname = proxy_hostname or config.get('server', 'proxy_hostname') or info['proxy_hostname']
-        _proxy_port = proxy_port or config.get('server', 'proxy_port') or info['proxy_port']
-        _proxy_user = proxy_user or config.get('server', 'proxy_user') or info['proxy_username']
-        _proxy_password = proxy_password or config.get('server', 'proxy_password') or info['proxy_password']
-
-        proxy_info = ProxyInfo(_proxy_hostname, _proxy_port,
-                               _proxy_user, _proxy_password)
-
-        return proxy_info
