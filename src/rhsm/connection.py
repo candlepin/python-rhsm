@@ -14,7 +14,7 @@
 # in this software or its documentation.
 #
 
-import certificate
+import certificate2
 import datetime
 import dateutil.parser
 import locale
@@ -46,7 +46,7 @@ except ImportError:
     subman_version = "unknown"
 
 from rhsm import ourjson as json
-from rhsm.utils import get_env_proxy_info
+from rhsm.utils import get_env_proxy_info, safe_int
 
 global_socket_timeout = 60
 timeout_altered = None
@@ -84,13 +84,6 @@ def set_default_socket_timeout_if_python_2_3():
 class NullHandler(logging.Handler):
     def emit(self, record):
         pass
-
-
-def safe_int(value, safe_value=None):
-    try:
-        return int(value)
-    except Exception:
-        return safe_value
 
 
 h = NullHandler()
@@ -501,7 +494,7 @@ class ClientCertInfo(object):
                           self.key_file)
 
     def validate_cert(self):
-        id_cert = certificate.create_from_file(self.cert_file)
+        id_cert = certificate2._CertFactory().create_from_file(self.cert_file)
         if not id_cert.is_valid():
             raise ExpiredIdentityCertException()
 

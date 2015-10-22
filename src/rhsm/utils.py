@@ -254,3 +254,10 @@ def cmd_name(argv):
         cmd_name_string = "initial-setup"
 
     return cmd_name_string
+
+
+def safe_int(value, safe_value=None):
+    try:
+        return int(value)
+    except Exception:
+        return safe_value

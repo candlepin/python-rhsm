@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 
 from rhsm import _certificate
 
-from rhsm.connection import safe_int
+from rhsm.utils import safe_int
 from rhsm.certificate import Extensions, OID, DateRange, GMT, \
         get_datetime_from_x509, parse_tags, CertificateException
 from rhsm.pathtree import PathTree
