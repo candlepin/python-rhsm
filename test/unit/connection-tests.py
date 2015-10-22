@@ -14,14 +14,16 @@
 # in this software or its documentation.
 #
 
+
 import sys
 import unittest
+
 
 from rhsm.connection import UEPConnection, Restlib, ConnectionException, ConnectionSetupException, \
         BadCertificateException, RestlibException, GoneException, NetworkException, \
         RemoteServerException, drift_check, ExpiredIdentityCertException, UnauthorizedException, \
         ForbiddenException, AuthenticationException, set_default_socket_timeout_if_python_2_3, \
-        RateLimitExceededException
+        RateLimitExceededException, RhsmResponseValidator, JsonDecoder, ProxyInfo
 
 from mock import Mock, patch
 from datetime import date
@@ -84,43 +86,6 @@ class ConnectionTests(unittest.TestCase):
     def test_clean_up_prefix(self):
         self.assertTrue(self.cp.handler == "/Test")
 
-    def test_https_proxy_info_allcaps(self):
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals("u", uep.proxy_user)
-            self.assertEquals("p", uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(int("4444"), uep.proxy_port)
-
-    def test_order(self):
-        # should follow the order: HTTPS, https, HTTP, http
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444', 'http_proxy': 'http://notme:orme@host:2222'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals("u", uep.proxy_user)
-            self.assertEquals("p", uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(int("4444"), uep.proxy_port)
-
-    def test_no_port(self):
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals("u", uep.proxy_user)
-            self.assertEquals("p", uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(3128, uep.proxy_port)
-
-    def test_no_user_or_password(self):
-        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://host:1111'}):
-            uep = UEPConnection(username="dummy", password="dummy",
-                 handler="/Test/", insecure=True)
-            self.assertEquals(None, uep.proxy_user)
-            self.assertEquals(None, uep.proxy_password)
-            self.assertEquals("host", uep.proxy_hostname)
-            self.assertEquals(int("1111"), uep.proxy_port)
-
     def test_sanitizeGuestIds_supports_strs(self):
         self.cp.supports_resource = Mock(return_value=True)
         guestIds = ['test' + str(i) for i in range(3)]
@@ -152,49 +117,122 @@ class ConnectionTests(unittest.TestCase):
         self.assertEquals(expected_guestIds, resultGuestIds)
 
 
-class RestlibValidateResponseTests(unittest.TestCase):
+class StubConfig(object):
+    def __init__(self):
+        pass
+
+    def get(self, section, key):
+        return None
+
+
+class TestProxyInfo(unittest.TestCase):
+
+    def test_https_proxy_info_allcaps(self):
+        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444'}):
+            config = StubConfig()
+            proxy_info = ProxyInfo.from_config(config)
+            self.assertEquals("u", proxy_info.username)
+            self.assertEquals("p", proxy_info.password)
+            self.assertEquals("host", proxy_info.hostname)
+            self.assertEquals(4444, proxy_info.port)
+
+    def test_order(self):
+        # should follow the order: HTTPS, https, HTTP, http
+        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host:4444', 'http_proxy': 'http://notme:orme@host:2222'}):
+            config = StubConfig()
+            proxy_info = ProxyInfo.from_config(config)
+            self.assertEquals("u", proxy_info.username)
+            self.assertEquals("p", proxy_info.password)
+            self.assertEquals("host", proxy_info.hostname)
+            self.assertEquals(4444, proxy_info.port)
+
+    def test_no_port(self):
+        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://u:p@host'}):
+            config = StubConfig()
+            proxy_info = ProxyInfo.from_config(config)
+            self.assertEquals("u", proxy_info.username)
+            self.assertEquals("p", proxy_info.password)
+            self.assertEquals("host", proxy_info.hostname)
+            self.assertEquals(3128, proxy_info.port)
+
+    def test_no_user_or_password(self):
+        with patch.dict('os.environ', {'HTTPS_PROXY': 'http://host:1111'}):
+            config = StubConfig()
+            proxy_info = ProxyInfo.from_config(config)
+            self.assertEquals(None, proxy_info.username)
+            self.assertEquals(None, proxy_info.password)
+            self.assertEquals("host", proxy_info.hostname)
+            self.assertEquals(1111, proxy_info.port)
+
+
+class StubRequest(object):
+    def __init__(self,
+                 method=None,
+                 path_url=None):
+        self.method = method
+        self.path_url = path_url
+
+
+class StubResponse(object):
+    def __init__(self,
+                 status_code=None,
+                 content=None,
+                 headers=None,
+                 request=None):
+        super(StubResponse, self).__init__()
+        self.status_code = status_code
+        self.content = content
+        self.headers = headers
+        self.text = content
+        self.request = request
+
+
+class RhsmResponseValidatorTests(unittest.TestCase):
     def setUp(self):
-        self.restlib = Restlib("somehost", "123", "somehandler")
+        self.validator = RhsmResponseValidator()
         self.request_type = "GET"
         self.handler = "https://server/path"
 
     def vr(self, status, content, headers=None):
-        response = {'status': status,
-                    'content': content}
-        if headers:
-            response['headers'] = headers
         #print "response", response
-        self.restlib.validateResponse(response, self.request_type, self.handler)
+        request = StubRequest(method=self.request_type,
+                              path_url=self.handler)
+
+        response = StubResponse(status_code=status,
+                                content=content,
+                                headers=headers,
+                                request=request)
+        self.validator.validate(response)
 
     # All empty responses that aren't 200/204 raise a NetworkException
     def test_200_empty(self):
         # this should just not raise any exceptions
-        self.vr("200", "")
+        self.vr(200, "")
 
     def test_200_json(self):
         # no exceptions
         content = u'{"something": "whatever"}'
-        self.vr("200", content)
+        self.vr(200, content)
 
     # 202 ACCEPTED
     def test_202_empty(self):
-        self.vr("202", "")
+        self.vr(202, "")
 
     def test_202_none(self):
-        self.vr("202", None)
+        self.vr(202, None)
 
     def test_202_json(self):
         content = u'{"something": "whatever"}'
-        self.vr("202", content)
+        self.vr(202, content)
 
     # 204 NO CONTENT
     # no exceptions is okay
     def test_204_empty(self):
-        self.vr("204", "")
+        self.vr(204, "")
 
     # no exceptions is okay
     def test_204_none(self):
-        self.vr("204", None)
+        self.vr(204, None)
 
     # MOVED PERMANENTLY
     # FIXME: implement 301 support?
@@ -209,15 +247,15 @@ class RestlibValidateResponseTests(unittest.TestCase):
         #        RemoteServerException
         self.assertRaises(NetworkException,
                           self.vr,
-                          "400",
+                          400,
                           "")
 
     def test_401_empty(self):
         try:
-            self.vr("401", "")
+            self.vr(401, "")
         except UnauthorizedException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
                        "Unauthorized: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -227,10 +265,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_401_invalid_json(self):
         content = u'{this is not json</> dfsdf"" '
         try:
-            self.vr("401", content)
+            self.vr(401, content)
         except UnauthorizedException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
                        "Unauthorized: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -242,10 +280,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
         mock_json_loads.side_effect = Exception
         content = u'{"errors": ["Forbidden message"]}'
         try:
-            self.vr("401", content)
+            self.vr(401, content)
         except UnauthorizedException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
                        "Unauthorized: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -255,19 +293,19 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_403_valid(self):
         content = u'{"errors": ["Forbidden message"]}'
         try:
-            self.vr("403", content)
+            self.vr(403, content)
         except RestlibException, e:
-            self.assertEquals("403", e.code)
+            self.assertEquals(403, e.code)
             self.assertEquals("Forbidden message", e.msg)
         else:
             self.fails("Should have raised a RestlibException")
 
     def test_403_empty(self):
         try:
-            self.vr("403", "")
+            self.vr(403, "")
         except ForbiddenException, e:
             self.assertEquals(self.request_type, e.request_type)
-            self.assertEquals("403", e.code)
+            self.assertEquals(403, e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 403\n" \
                        "Forbidden: Invalid credentials for request."
             self.assertEquals(expected_str, str(e))
@@ -277,20 +315,20 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_401_valid(self):
         content = u'{"errors": ["Unauthorized message"]}'
         try:
-            self.vr("401", content)
+            self.vr(401, content)
         except RestlibException, e:
-            self.assertEquals("401", e.code)
+            self.assertEquals(401, e.code)
             self.assertEquals("Unauthorized message", e.msg)
         else:
             self.fails("Should have raised a RestlibException")
 
     def test_404_empty(self):
         try:
-            self.vr("404", "")
+            self.vr(404, "")
         except RemoteServerException, e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
             self.assertEquals("Server error attempting a GET to https://server/path returned status 404", str(e))
         else:
             self.fails("Should have raise RemoteServerException")
@@ -298,9 +336,9 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_valid_but_irrelevant_json(self):
         content = u'{"something": "whatever"}'
         try:
-            self.vr("404", content)
+            self.vr(404, content)
         except RestlibException, e:
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
             self.assertEquals("", e.msg)
         else:
             self.fails("Should have raised a RemoteServerException")
@@ -308,10 +346,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_valid_body_old_style(self):
         content = u'{"displayMessage": "not found"}'
         try:
-            self.vr("404", content)
+            self.vr(404, content)
         except RestlibException, e:
             self.assertEquals("not found", e.msg)
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
         except Exception, e:
             self.fail("RestlibException expected, got %s" % e)
         else:
@@ -320,10 +358,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_valid_body(self):
         content = u'{"errors": ["not found", "still not found"]}'
         try:
-            self.vr("404", content)
+            self.vr(404, content)
         except RestlibException, e:
             self.assertEquals("not found still not found", e.msg)
-            self.assertEquals("404", e.code)
+            self.assertEquals(404, e.code)
         except Exception, e:
             self.fail("RestlibException expected, got %s" % e)
         else:
@@ -331,7 +369,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
 
     def test_410_emtpy(self):
         try:
-            self.vr("410", "")
+            self.vr(410, "")
         except RemoteServerException, e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
@@ -342,19 +380,19 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"displayMessage": "foo", "deletedId": "12345"}'
         #self.assertRaises(GoneException, self.vr, "410", content)
         try:
-            self.vr("410", content)
+            self.vr(410, content)
         except GoneException, e:
             self.assertEquals("12345", e.deleted_id)
             self.assertEquals("foo", e.msg)
-            self.assertEquals("410", e.code)
+            self.assertEquals(410, e.code)
         else:
             self.fail("Should have raised a GoneException")
 
     def test_429_empty(self):
         try:
-            self.vr("429", "")
+            self.vr(429, "")
         except RateLimitExceededException, e:
-            self.assertEquals("429", e.code)
+            self.assertEquals(429, e.code)
         else:
             self.fail("Should have raised a RateLimitExceededException")
 
@@ -362,17 +400,17 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"errors": ["TooFast"]}'
         headers = {'Retry-After': 20}
         try:
-            self.vr("429", content, headers)
+            self.vr(429, content, headers)
         except RateLimitExceededException, e:
             self.assertEquals(20, e.retry_after)
-            self.assertEquals("TooFast", e.msg)
-            self.assertEquals("429", e.code)
+            #self.assertEquals("TooFast", e.msg)
+            self.assertEquals(429, e.code)
         else:
             self.fail("Should have raised a RateLimitExceededException")
 
     def test_500_empty(self):
         try:
-            self.vr("500", "")
+            self.vr(500, "")
         except RemoteServerException, e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
@@ -380,10 +418,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
             self.fail("RemoteServerException expected")
 
     def test_599_emtpty(self):
-        self.assertRaises(NetworkException, self.vr, "599", "")
+        self.assertRaises(NetworkException, self.vr, 599, "")
 
 
-class RestlibTests(unittest.TestCase):
+class JsonDecoderTests(unittest.TestCase):
 
     def test_json_uft8_encoding(self):
         # A unicode string containing JSON
@@ -400,8 +438,7 @@ class RestlibTests(unittest.TestCase):
                 ]
             }
         """
-        restlib = Restlib("somehost", "123", "somehandler")
-        data = json.loads(test_json, object_hook=restlib._decode_dict)
+        data = json.loads(test_json, object_hook=JsonDecoder.decode_dict)
         self.assertTrue(isinstance(data["message"], str))
         # Access a value deep in the structure to make sure we recursed down.
         self.assertTrue(isinstance(data["phoneNumbers"][0][0]["type"], str))

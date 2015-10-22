@@ -228,15 +228,6 @@ class HypervisorCheckinTests(unittest.TestCase):
         self.assertEqual(len(response['created']), 0)
 
 
-#@attr('functional')
-#class RestlibTests(unittest.TestCase):
-#
-#    def setUp(self):
-#        # Get handle to Restlib
-#        self.conn = UEPConnection().conn
-#        self.request_type = "GET"
-#        self.handler = "https://server/path"
-
 
 @attr('functional')
 class ValidateResponseTests(unittest.TestCase):

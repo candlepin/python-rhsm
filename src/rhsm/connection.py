@@ -338,6 +338,7 @@ class RhsmResponseValidator(object):
         return None
 
     def validate(self, response):
+        # FIXME: sort out when/where we want status_code as int vs string
         status_code = response.status_code
         if status_code in [200, 202, 204]:
             return
@@ -469,6 +470,7 @@ class ProxyInfo(object):
 
         return proxy_info
 
+    # FIXME: really from_config_and_env
     @classmethod
     def from_config(cls, config):
         info = get_env_proxy_info()
@@ -620,7 +622,7 @@ class RhsmSession(requests.Session):
         log.debug("self.cert=%s", self.cert)
 
 
-class RhsmRestlib(object):
+class Restlib(object):
     """
      A wrapper around httplib to make rest calls easier
      See validateResponse() to learn when exceptions are raised as a result
@@ -771,7 +773,7 @@ class RhsmRestlib(object):
 
 # TODO: Needs to be a wrapper class for setting up auth/session for cdn access
 # This won'tt be a a Restlib subclass, likely just a request.Session with the right setup
-class EntitlementCertRestlib(RhsmRestlib):
+class EntitlementCertRestlib(Restlib):
     ent_dir = "/etc/pki/entitlement"
 
     def _setup_server_cert_verify(self):
@@ -862,7 +864,7 @@ class BaseRhsmConnection(object):
         self.session = session
 
         # ? Restlib arg?
-        self.conn = RhsmRestlib(self.session, base_url=base_url)
+        self.conn = Restlib(self.session, base_url=base_url)
 
     def shutDown(self):
         self.conn.close()
