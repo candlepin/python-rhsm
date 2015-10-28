@@ -217,6 +217,7 @@ class RemoteServerException(ConnectionException):
         return "Server returned %s" % self.code
 
 
+        log.debug("428 response=%s", response)
 
 class AuthenticationException(RemoteServerException):
     prefix = "Authentication error"
@@ -662,9 +663,16 @@ class Restlib(object):
         Note, request's 'method' arg is the http method ('GET', etc)
         where we usually use that to mean the REST api slug ('/candlepin/consumers/release')
         """
-        verb = kwargs.pop('verb', 'GET')
-        r = self.session.request(method=verb,
+        method = kwargs.pop('method', 'GET')
+        headers = {}
+        headers.update(self.session.headers)
+        log.debug("headers0=%s", headers)
+        headers.update(kwargs.pop('headers', {}))
+        log.debug("headers=%s", headers)
+
+        r = self.session.request(method=method,
                                  url=url,
+                                 headers=headers,
                                  **kwargs)
         return r.text
 
@@ -979,16 +987,21 @@ class BaseRhsmConnection(object):
 
         """
         if (self.has_capability("hypervisors_async")):
-            #pass
-            # FIXME:
-            #           priorContentType = self.conn.headers['Content-type']
-            #           self.conn.headers['Content-type'] = 'text/plain'
+            # POST /hypervisors is two different APIS, one for posting text/plain
+            # and one for posting text/json
+            content_type = 'text/plain'
+            new_headers = {'Content-type': content_type}
             query_params = urlencode({"env": env, "cloaked": False})
+            data = self.conn.json_dumps(host_guest_mapping)
             url = "/hypervisors/%s?%s" % (owner, query_params)
-            res = self.conn.request_post(url, host_guest_mapping)
+
+            # Make a request via our restlib and session but provide
+            # additional headers.
+            res = self.conn.request_request(url,
+                                            method="POST",
+                                            headers=new_headers,
+                                            data=data)
             return res
-            #           self.conn.headers['Content-type'] = priorContentType
-            #raise Exception("adrian hasn't fixed this yet")
         else:
             # fall back to original report api
             # this results in the same json as in the result_data field

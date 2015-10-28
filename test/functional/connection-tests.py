@@ -223,10 +223,12 @@ class HypervisorCheckinTests(unittest.TestCase):
     def test_hypervisor_checkin_can_pass_empty_map_and_updates_nothing(self):
         response = self.cp.hypervisorCheckIn("admin", "", {})
 
-        self.assertEqual(len(response['failedUpdate']), 0)
-        self.assertEqual(len(response['updated']), 0)
-        self.assertEqual(len(response['created']), 0)
-
+        if self.cp.has_capability('hypervisors_async'):
+            self.assertEqual(response['resultData'], None)
+        else:
+            self.assertEqual(len(response['failedUpdate']), 0)
+            self.assertEqual(len(response['updated']), 0)
+            self.assertEqual(len(response['created']), 0)
 
 
 @attr('functional')

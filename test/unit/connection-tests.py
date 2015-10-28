@@ -389,8 +389,9 @@ class RhsmResponseValidatorTests(unittest.TestCase):
             self.fail("Should have raised a GoneException")
 
     def test_429_empty(self):
+        headers = {'Retry-After': 20}
         try:
-            self.vr(429, "")
+            self.vr(429, "", headers=headers)
         except RateLimitExceededException, e:
             self.assertEquals(429, e.code)
         else:
