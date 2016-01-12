@@ -25,6 +25,7 @@ import os
 import socket
 import sys
 import urllib
+import time
 
 from M2Crypto import SSL, httpslib
 from M2Crypto.SSL import SSLError
@@ -47,6 +48,7 @@ from rhsm import ourjson as json
 from rhsm import utils
 
 config = initConfig()
+ssl_retries = 3
 
 
 def safe_int(value, safe_value=None):
@@ -559,31 +561,48 @@ class Restlib(object):
         if self.cert_file and os.path.exists(self.cert_file):
             context.load_cert(self.cert_file, keyfile=self.key_file)
 
-        if self.proxy_hostname and self.proxy_port:
-            log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
-            conn = RhsmProxyHTTPSConnection(self.proxy_hostname, self.proxy_port,
-                                            username=self.proxy_user,
-                                            password=self.proxy_password,
-                                            ssl_context=context, timeout=self.timeout)
-            # this connection class wants the full url
-            handler = "https://%s:%s%s" % (self.host, self.ssl_port, handler)
-        else:
-            conn = HTTPSConnection(self.host, self.ssl_port, ssl_context=context, timeout=self.timeout)
+        # Use a retry for intermittent connection issues
+        for num in range(ssl_retries):
+            if self.proxy_hostname and self.proxy_port:
+                log.debug("Using proxy: %s:%s" % (self.proxy_hostname, self.proxy_port))
+                conn = RhsmProxyHTTPSConnection(self.proxy_hostname, self.proxy_port,
+                                                username=self.proxy_user,
+                                                password=self.proxy_password,
+                                                ssl_context=context)
+                # this connection class wants the full url
+                handler = "https://%s:%s%s" % (self.host, self.ssl_port, handler)
+            else:
+                conn = httpslib.HTTPSConnection(self.host, self.ssl_port, ssl_context=context)
 
-        if info is not None:
-            body = json.dumps(info, default=json.encode)
-        else:
-            body = None
+            if info is not None:
+                body = json.dumps(info, default=json.encode)
+            else:
+                body = None
 
-        log.debug("Making request: %s %s" % (request_type, handler))
+            log.debug("Making request: %s %s" % (request_type, handler))
 
-        if self.user_agent:
-            self.headers['User-Agent'] = self.user_agent
+            if self.user_agent:
+                self.headers['User-Agent'] = self.user_agent
 
-        headers = self.headers
-        if body is None:
-            headers = dict(self.headers.items() +
-                           {"Content-Length": "0"}.items())
+            headers = self.headers
+            if body is None:
+                headers = dict(self.headers.items() +
+                               {"Content-Length": "0"}.items())
+
+            try:
+                conn.request(request_type, handler, body=body, headers=headers)
+                break
+            except SSLError:
+                if self.cert_file:
+                    id_cert = certificate.create_from_file(self.cert_file)
+                    if not id_cert.is_valid():
+                        raise ExpiredIdentityCertException()
+                    # we should retry here, its not an identity cert issue
+                    if num == ssl_retries - 1:
+                        raise
+                    else:
+                        log.warn('SSL failure on connection request, retrying.')
+                        time.sleep(1)
 
         try:
             conn.request(request_type, handler, body=body, headers=headers)
@@ -597,6 +616,7 @@ class Restlib(object):
             if str(e)[-3:] == str(httplib.PROXY_AUTHENTICATION_REQUIRED):
                 raise ProxyException(e)
             raise
+        
         response = conn.getresponse()
         result = {
             "content": response.read(),
