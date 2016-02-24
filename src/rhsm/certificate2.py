@@ -310,7 +310,8 @@ class _CertFactory(object):
                 stacking_id=sub.get('stacking_id', None),
                 virt_only=sub.get('virt_only', False),
                 ram_limit=sub.get('ram', None),
-                core_limit=sub.get('cores', None)
+                core_limit=sub.get('cores', None),
+                subscription=order.get('subscription', None)
             )
 
     def _parse_v3_products(self, payload):
@@ -681,7 +682,7 @@ class Order(object):
         self.number = number  # order number
         self.sku = sku  # aka the marketing product
 
-        self.subscription = subscription  # seems to be unused
+        self.subscription = subscription
 
         # total quantity on the order:
         self.quantity = safe_int(quantity, None)  # rarely used
