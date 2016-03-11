@@ -121,8 +121,8 @@ class HuffmanNode(object):
                 return left
             heapq.heappush(queue, (cls.combine(left, right), next(counter)))
 
-    def __cmp__(self, other):
-        return cmp(self.weight, other.weight)
+    def __lt__(self, other):
+        return self.weight < other.weight
 
     def __repr__(self):
         return 'HuffmanNode(%d, "%s")' % (self.weight, self.value)
