@@ -16,7 +16,10 @@
 import gettext
 import os
 import re
-from urlparse import urlparse
+try:
+    from urlparse import urlparse
+except ImportError:
+    from urllib.parse import urlparse
 
 from rhsm.config import DEFAULT_PROXY_PORT
 
