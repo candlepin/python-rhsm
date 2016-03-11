@@ -62,7 +62,7 @@ static void
 certificate_x509_dealloc (certificate_x509 *self)
 {
 	X509_free (self->x509);
-	self->ob_type->tp_free ((PyObject *) self);
+	Py_TYPE(self)->tp_free ((PyObject *) self);
 }
 
 static PyObject *get_not_before (certificate_x509 *self, PyObject *varargs);
@@ -97,8 +97,7 @@ static PyMethodDef x509_methods[] = {
 };
 
 static PyTypeObject certificate_x509_type = {
-	PyObject_HEAD_INIT (NULL)
-	0,
+	PyVarObject_HEAD_INIT (NULL, 0)
 	"_certificate.X509",
 	sizeof (certificate_x509),
 	0,			/*tp_itemsize */
