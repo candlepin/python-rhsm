@@ -45,8 +45,9 @@ class rpm_version_release_build_py(build_py):
         cmd = ["git", "describe"]
         process = Popen(cmd, stdout=PIPE)
         output = process.communicate()[0].strip()
-        if output.startswith('python-rhsm-'):
-            return output[len('python-rhsm-'):]
+        # FIXME: fix encodings
+        if output.startswith(b'python-rhsm-'):
+            return output[len(b'python-rhsm-'):]
         return 'unknown'
 
     def run(self):
