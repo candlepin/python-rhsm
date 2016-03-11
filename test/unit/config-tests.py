@@ -171,12 +171,14 @@ repo_ca_cert = %(ca_cert_dir)snon_default.pem
 def write_temp_file(data):
     # create a temp file for use as a config file. This should get cleaned
     # up magically at the end of the run.
-    fid = NamedTemporaryFile(mode='w+b', suffix='.tmp')
+    fid = NamedTemporaryFile(mode='w+t', suffix='.tmp')
     fid.write(data)
     fid.seek(0)
     return fid
 
+
 class BaseConfigTests(unittest.TestCase):
+    cfgfile_data = None
 
     def setUp(self):
         self.fid = write_temp_file(self.cfgfile_data)
