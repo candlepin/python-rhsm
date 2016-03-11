@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 # Copyright (c) 2012 Red Hat, Inc.
 #
 # This software is licensed to you under the GNU General Public License,
@@ -14,8 +15,8 @@
 import itertools
 import zlib
 
-from bitstream import GhettoBitStream
-from huffman import HuffmanNode
+from .bitstream import GhettoBitStream
+from .huffman import HuffmanNode
 
 # this is the "sentinel" value used for the path node that indicates the end
 # of a path

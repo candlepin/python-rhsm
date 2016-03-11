@@ -1,7 +1,8 @@
+from __future__ import absolute_import
 import unittest
 import os
 
-import certdata
+from . import certdata
 from rhsm.certificate import OID
 
 from mock import patch

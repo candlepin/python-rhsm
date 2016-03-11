@@ -215,7 +215,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_401_empty(self):
         try:
             self.vr("401", "")
-        except UnauthorizedException, e:
+        except UnauthorizedException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals("401", e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
@@ -228,7 +228,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{this is not json</> dfsdf"" '
         try:
             self.vr("401", content)
-        except UnauthorizedException, e:
+        except UnauthorizedException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals("401", e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
@@ -243,7 +243,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"errors": ["Forbidden message"]}'
         try:
             self.vr("401", content)
-        except UnauthorizedException, e:
+        except UnauthorizedException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals("401", e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 401\n" \
@@ -256,7 +256,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"errors": ["Forbidden message"]}'
         try:
             self.vr("403", content)
-        except RestlibException, e:
+        except RestlibException as e:
             self.assertEquals("403", e.code)
             self.assertEquals("Forbidden message", e.msg)
         else:
@@ -265,7 +265,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_403_empty(self):
         try:
             self.vr("403", "")
-        except ForbiddenException, e:
+        except ForbiddenException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals("403", e.code)
             expected_str = "Server error attempting a GET to https://server/path returned status 403\n" \
@@ -278,7 +278,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"errors": ["Unauthorized message"]}'
         try:
             self.vr("401", content)
-        except RestlibException, e:
+        except RestlibException as e:
             self.assertEquals("401", e.code)
             self.assertEquals("Unauthorized message", e.msg)
         else:
@@ -287,7 +287,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_404_empty(self):
         try:
             self.vr("404", "")
-        except RemoteServerException, e:
+        except RemoteServerException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
             self.assertEquals("404", e.code)
@@ -299,7 +299,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"something": "whatever"}'
         try:
             self.vr("404", content)
-        except RestlibException, e:
+        except RestlibException as e:
             self.assertEquals("404", e.code)
             self.assertEquals("", e.msg)
         else:
@@ -309,10 +309,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"displayMessage": "not found"}'
         try:
             self.vr("404", content)
-        except RestlibException, e:
+        except RestlibException as e:
             self.assertEquals("not found", e.msg)
             self.assertEquals("404", e.code)
-        except Exception, e:
+        except Exception as e:
             self.fail("RestlibException expected, got %s" % e)
         else:
             self.fail("RestlibException expected")
@@ -321,10 +321,10 @@ class RestlibValidateResponseTests(unittest.TestCase):
         content = u'{"errors": ["not found", "still not found"]}'
         try:
             self.vr("404", content)
-        except RestlibException, e:
+        except RestlibException as e:
             self.assertEquals("not found still not found", e.msg)
             self.assertEquals("404", e.code)
-        except Exception, e:
+        except Exception as e:
             self.fail("RestlibException expected, got %s" % e)
         else:
             self.fail("RestlibException expected")
@@ -332,7 +332,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_410_emtpy(self):
         try:
             self.vr("410", "")
-        except RemoteServerException, e:
+        except RemoteServerException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
         else:
@@ -343,7 +343,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         #self.assertRaises(GoneException, self.vr, "410", content)
         try:
             self.vr("410", content)
-        except GoneException, e:
+        except GoneException as e:
             self.assertEquals("12345", e.deleted_id)
             self.assertEquals("foo", e.msg)
             self.assertEquals("410", e.code)
@@ -353,7 +353,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_429_empty(self):
         try:
             self.vr("429", "")
-        except RateLimitExceededException, e:
+        except RateLimitExceededException as e:
             self.assertEquals("429", e.code)
         else:
             self.fail("Should have raised a RateLimitExceededException")
@@ -363,7 +363,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
         headers = {'Retry-After': 20}
         try:
             self.vr("429", content, headers)
-        except RateLimitExceededException, e:
+        except RateLimitExceededException as e:
             self.assertEquals(20, e.retry_after)
             self.assertEquals("TooFast", e.msg)
             self.assertEquals("429", e.code)
@@ -373,7 +373,7 @@ class RestlibValidateResponseTests(unittest.TestCase):
     def test_500_empty(self):
         try:
             self.vr("500", "")
-        except RemoteServerException, e:
+        except RemoteServerException as e:
             self.assertEquals(self.request_type, e.request_type)
             self.assertEquals(self.handler, e.handler)
         else:

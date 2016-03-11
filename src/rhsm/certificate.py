@@ -27,6 +27,7 @@ automatically create the correct object for any given certificate.
 Eventually the deprecated classes below will be removed, and the new classes
 will be relocated into this module.
 """
+from __future__ import absolute_import
 
 import os
 import re
@@ -55,12 +56,12 @@ VALUE_PATTERN = re.compile('.*prim:\s(\w*)\s*:*(.*)')
 # we're using two modules for the time being. Eventually the certificate2 code
 # should be moved here.
 def create_from_file(path):
-    from certificate2 import _CertFactory  # prevent circular deps
+    from .certificate2 import _CertFactory  # prevent circular deps
     return _CertFactory().create_from_file(path)
 
 
 def create_from_pem(pem):
-    from certificate2 import _CertFactory  # prevent circular deps
+    from .certificate2 import _CertFactory  # prevent circular deps
     return _CertFactory().create_from_pem(pem)
 
 
@@ -601,7 +602,7 @@ class Key(object):
         f.write(self.content)
         self.path = pem_path
         f.close()
-        os.chmod(pem_path, 0600)
+        os.chmod(pem_path, 0o600)
         return self
 
     def delete(self):

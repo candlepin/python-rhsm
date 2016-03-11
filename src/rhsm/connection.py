@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 # A proxy interface to initiate and interact with candlepin.
 #
 # Copyright (c) 2010 - 2012 Red Hat, Inc.
@@ -15,7 +16,7 @@
 #
 
 import base64
-import certificate
+from . import certificate
 import datetime
 import dateutil.parser
 import locale
@@ -31,9 +32,9 @@ from M2Crypto import m2
 
 from urllib import urlencode
 
-from config import initConfig
+from .config import initConfig
 
-import version
+from . import version
 python_rhsm_version = version.rpm_version
 
 try:
@@ -109,7 +110,7 @@ def drift_check(utc_time_string, hours=1):
             local_datetime = datetime.datetime.utcnow().replace(tzinfo=utc_datetime.tzinfo)
             delta = datetime.timedelta(hours=hours)
             drift = abs((utc_datetime - local_datetime)) > delta
-        except Exception, e:
+        except Exception as e:
             log.error(e)
 
     return drift
@@ -377,7 +378,7 @@ class ContentConnection(object):
                     context.load_cert(cert_path, key_path)
                     #if res == 0:
                     #    raise BadCertificateException(cert_path)
-        except OSError, e:
+        except OSError as e:
             raise ConnectionSetupException(e.strerror)
 
     def test(self):
@@ -502,7 +503,7 @@ class Restlib(object):
                     loaded_ca_certs.append(cert_file)
                     if res == 0:
                         raise BadCertificateException(cert_path)
-        except OSError, e:
+        except OSError as e:
             raise ConnectionSetupException(e.strerror)
 
         if loaded_ca_certs:
@@ -614,10 +615,10 @@ class Restlib(object):
                 # try vaguely to see if it had a json parseable body
                 try:
                     parsed = json.loads(response['content'], object_hook=self._decode_dict)
-                except ValueError, e:
+                except ValueError as e:
                     log.error("Response: %s" % response['status'])
                     log.error("JSON parsing error: %s" % e)
-                except Exception, e:
+                except Exception as e:
                     log.error("Response: %s" % response['status'])
                     log.exception(e)
 

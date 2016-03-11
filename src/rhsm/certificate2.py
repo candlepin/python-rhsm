@@ -93,9 +93,9 @@ class _CertFactory(object):
             if version.major == 3:
                 return self._create_v3_cert(version, extensions, x509, path, pem)
 
-        except CertificateException, e:
+        except CertificateException as e:
             raise e
-        except Exception, e:
+        except Exception as e:
             log.exception(e)
             raise CertificateException(str(e))
 
@@ -369,7 +369,7 @@ class _CertFactory(object):
         try:
             decompressed = zlib.decompress(payload)
             return json.loads(decompressed)
-        except Exception, e:
+        except Exception as e:
             log.exception(e)
             raise CertificateException("Error decompressing/parsing "
                     "certificate payload.")
@@ -620,7 +620,7 @@ class EntitlementCertificate(ProductCertificate):
         dir_path, cert_filename = os.path.split(self.path)
         try:
             key_filename = "%s-key.%s" % tuple(cert_filename.rsplit(".", 1))
-        except TypeError, e:
+        except TypeError as e:
             log.exception(e)
             raise CertificateException("Entitlement certificate path \"%s\" is not in "
                                        "in the expected format so the key file path "

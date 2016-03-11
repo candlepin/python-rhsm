@@ -294,7 +294,7 @@ class ConfigTests(BaseConfigTests):
 
     def test_get_int(self):
         value = self.cfgParser.get_int("server", "port")
-        self.assertTrue(isinstance(value, types.IntType))
+        self.assertTrue(isinstance(value, int))
         self.assertEquals(8443, value)
 
     def test_interpolation(self):

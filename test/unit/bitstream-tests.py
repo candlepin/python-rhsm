@@ -36,7 +36,7 @@ class TestGhettoBitStream(unittest.TestCase):
         self.assertEqual(len(self.bs.bytes), length - 1)
 
     def test_as_iterator(self):
-        self.bs.next()
+        next(self.bs)
         self.assertTrue(list(self.bs))
 
     def test_bit_buffer(self):
@@ -44,13 +44,13 @@ class TestGhettoBitStream(unittest.TestCase):
         # empty buffer
         self.assertEqual(len(self.bs._bit_buffer), 0)
 
-        bit = self.bs.next()
+        bit = next(self.bs)
         # one byte decoded, then one bit consumed
         self.assertEqual(len(self.bs._bit_buffer), 7)
         # one byte removed
         self.assertEqual(len(self.bs.bytes), byte_count - 1)
 
-        bit = self.bs.next()
+        bit = next(self.bs)
         # another bit consumed
         self.assertEqual(len(self.bs._bit_buffer), 6)
         # remaining bytes still stand
