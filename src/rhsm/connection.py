@@ -150,9 +150,10 @@ class RestlibException(ConnectionException):
     See RestLib.validateResponse to see when this and other exceptions are raised.
     """
 
-    def __init__(self, code, msg=None):
+    def __init__(self, code, msg=None, handler=None):
         self.code = code
         self.msg = msg or ""
+        self.handler = handler
 
     def __str__(self):
         return self.msg
@@ -210,8 +211,6 @@ class RemoteServerException(ConnectionException):
         return "Server returned %s" % self.code
 
 
-        log.debug("428 response=%s", response)
-
 class AuthenticationException(RemoteServerException):
     prefix = "Authentication error"
 
@@ -230,12 +229,14 @@ class RateLimitExceededException(RestlibException):
     The retry_after attribute may not be included in the response.
     """
     def __init__(self, code,
-                 msg=None,
-                 headers=None):
-        super(RateLimitExceededException, self).__init__(code,
-                                                         msg)
-        self.headers = headers or {}
-        self.msg = msg or ""
+                 request_type=None,
+                 handler=None,
+                 response=None):
+        super(RateLimitExceededException, self).__init__(code, request_type, handler)
+
+        self.response = response
+        self.headers = self.response.headers or {}
+        self.msg = self.response.text or ""
         self.retry_after = safe_int(self.headers.get('Retry-After'))
 
 
@@ -1248,7 +1249,7 @@ class BaseRhsmConnection(object):
         Return will be a dict containing a "quantity" and a "pool".
         """
         method = "/consumers/%s/entitlements/dry-run?service_level=%s" % \
-                (self.sanitize(consumer_uuid), self.sanitize(service_level))
+            (self.sanitize(consumer_uuid), self.sanitize(service_level))
         return self.conn.request_get(method)
 
     def unbindBySerial(self, consumerId, serial):
@@ -1457,8 +1458,8 @@ class BaseRhsmConnection(object):
         return results
 
     def sanitize(self, url_param, plus=False):
-        #This is a wrapper around urllib.quote to avoid issues like the one
-        #discussed in http://bugs.python.org/issue9301
+        # This is a wrapper around urllib.quote to avoid issues like the one
+        # discussed in http://bugs.python.org/issue9301
         if plus:
             sane_string = urllib.quote_plus(str(url_param))
         else:
