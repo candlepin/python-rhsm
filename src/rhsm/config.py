@@ -49,7 +49,7 @@ SERVER_DEFAULTS = {
         'prefix': DEFAULT_PREFIX,
         'port': DEFAULT_PORT,
         'insecure': '0',
-        'ssl_verify_depth': '3',
+        'ssl_verify_depth': None,
         'proxy_hostname': '',
         'proxy_user': '',
         'proxy_port': '',

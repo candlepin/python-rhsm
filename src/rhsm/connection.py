@@ -293,13 +293,12 @@ class ContentConnection(object):
                  proxy_hostname=None, proxy_port=None,
                  proxy_user=None, proxy_password=None,
                  ca_dir=None, insecure=False,
-                 ssl_verify_depth=1):
+                 ssl_verify_depth=None):
 
         log.debug("ContectConnection")
         # FIXME
         self.ent_dir = "/etc/pki/entitlement"
         self.handler = "/"
-        self.ssl_verify_depth = ssl_verify_depth
 
         self.host = host or config.get('server', 'hostname')
         self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
@@ -307,6 +306,11 @@ class ContentConnection(object):
         self.insecure = insecure
         self.username = username
         self.password = password
+
+        # ssl_verify_depth == None means to use the underlying ssl implementations default
+        # Currently, that means m2crypto->openssl, which default to 100.
+        # NOTE/FIXME: We don't actually use self.ssl_verify_depth anywhere so this has always
+        # used the default system value.
         self.ssl_verify_depth = ssl_verify_depth
         self.timeout_altered = False
 
@@ -431,7 +435,8 @@ class Restlib(object):
             proxy_hostname=None, proxy_port=None,
             proxy_user=None, proxy_password=None,
             cert_file=None, key_file=None,
-            ca_dir=None, insecure=False, ssl_verify_depth=1):
+            ca_dir=None, insecure=False,
+            ssl_verify_depth=None):
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
@@ -526,13 +531,21 @@ class Restlib(object):
         # Disable SSLv2 and SSLv3 support to avoid poodles.
         context.set_options(m2.SSL_OP_NO_SSLv2 | m2.SSL_OP_NO_SSLv3)
 
+        # Whatever m2crypto/openssl sets as the default, typicall 100
+        default_verify = context.get_verify_depth()
+
+        # We have to specify verify_depth as an option to context.set_verify,
+        # so use the default if not specifically set on this object
+        # self.ssl_verify_depth is from passed in verify_depth args, which is
+        # None by default.
+        verify_depth = self.ssl_verify_depth or default_verify
+
         if self.insecure:  # allow clients to work insecure mode if required..
             context.post_connection_check = NoOpChecker()
         else:
             # Proper peer verification is essential to prevent MITM attacks.
-            context.set_verify(
-                    SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
-                    self.ssl_verify_depth)
+            context.set_verify(SSL.verify_peer | SSL.verify_fail_if_no_peer_cert,
+                               verify_depth)
             if self.ca_dir is not None:
                 self._load_ca_certificates(context)
         if self.cert_file and os.path.exists(self.cert_file):
@@ -750,6 +763,11 @@ class UEPConnection:
         self.password = password
 
         self.ca_cert_dir = config.get('rhsm', 'ca_cert_dir')
+
+        # Previous config file default was '3'. New config defaults to not
+        # setting it at all. So we intrepet that as 'use the default system verify_depth'
+        # I am not sure what a depth of 0 means. Does that make self signed certs ok?
+        # Or does that make everything fail?
         self.ssl_verify_depth = safe_int(config.get('server', 'ssl_verify_depth'))
 
         self.insecure = insecure
