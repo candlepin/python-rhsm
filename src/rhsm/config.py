@@ -44,10 +44,13 @@ DEFAULT_CA_CERT_DIR = '/etc/rhsm/ca/'
 DEFAULT_ENT_CERT_DIR = '/etc/pki/entitlement'
 HOST_ENT_CERT_DIR = '/etc/pki/entitlement-host'
 
+DEFAULT_SERVER_TIMEOUT = 180
+
 SERVER_DEFAULTS = {
         'hostname': DEFAULT_HOSTNAME,
         'prefix': DEFAULT_PREFIX,
         'port': DEFAULT_PORT,
+        'timeout': DEFAULT_SERVER_TIMEOUT,
         'insecure': '0',
         'ssl_verify_depth': '3',
         'proxy_hostname': '',

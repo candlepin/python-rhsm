@@ -289,13 +289,14 @@ class RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
 # Restlib to be Restlib based on a https client class
 class ContentConnection(object):
     def __init__(self, host, ssl_port=None,
+                 timeout=None,   
                  username=None, password=None,
                  proxy_hostname=None, proxy_port=None,
                  proxy_user=None, proxy_password=None,
                  ca_dir=None, insecure=False,
                  ssl_verify_depth=1):
 
-        log.debug("ContectConnection")
+        log.debug("ContentConnection")
         # FIXME
         self.ent_dir = "/etc/pki/entitlement"
         self.handler = "/"
@@ -308,6 +309,14 @@ class ContentConnection(object):
         self.username = username
         self.password = password
         self.ssl_verify_depth = ssl_verify_depth
+
+        self.timeout = timeout or safe_int(config.get('server', 'timeout'))
+        if self.timeout:
+            global timeout_altered
+            if not timeout_altered:
+                socket.setdefaulttimeout(timeout)
+                timeout_altered = True
+
         self.timeout_altered = False
 
         # get the proxy information from the environment variable
@@ -435,6 +444,7 @@ class Restlib(object):
         self.host = host
         self.ssl_port = ssl_port
         self.apihandler = apihandler
+
         lc = _get_locale()
 
         # Default, updated by UepConnection
@@ -706,6 +716,7 @@ class UEPConnection:
             host=None,
             ssl_port=None,
             handler=None,
+            timeout=None,
             proxy_hostname=None,
             proxy_port=None,
             proxy_user=None,
@@ -724,6 +735,12 @@ class UEPConnection:
         self.host = host or config.get('server', 'hostname')
         self.ssl_port = ssl_port or safe_int(config.get('server', 'port'))
         self.handler = handler or config.get('server', 'prefix')
+        self.timeout = timeout or safe_int(config.get('server', 'timeout'))
+        if self.timeout:
+            global timeout_altered
+            if not timeout_altered:
+                socket.setdefaulttimeout(timeout)
+                timeout_altered = True
 
         # remove trailing "/" from the prefix if it is there
         # BZ848836
