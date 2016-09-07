@@ -12,7 +12,7 @@
 %{!?__global_ldflags: %global __global_ldflags -Wl,-z,relro -Wl,-z,now}
 
 Name: python-rhsm
-Version: 1.17.7
+Version: 1.17.8
 Release: 1%{?dist}
 
 Summary: A Python library to communicate with a Red Hat Unified Entitlement Platform
@@ -97,6 +97,9 @@ rm -rf %{buildroot}
 %attr(644,root,root) %{_sysconfdir}/rhsm/ca/*.pem
 
 %changelog
+* Wed Sep 07 2016 Christopher Snyder <csnyder@redhat.com> 1.17.8-1
+- 1367243: Fix 404 check in regen entitlement funcs (khowell@redhat.com)
+
 * Fri Aug 26 2016 Vritant Jain <vrjain@redhat.com> 1.17.7-1
 - 1366301: Entitlement regeneration no longer propagates server errors
   (crog@redhat.com)
