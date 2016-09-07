@@ -1363,13 +1363,13 @@ class UEPConnection:
             # 404s indicate that the service is unsupported (Candlepin too old, or SAM)
             if str(e.code) == "404":
                 log.debug("Unable to refresh entitlement certificates: Service currently unsupported.")
-                log.debug(e)
+                log.exception(e)
             else:
                 # Something else happened that we should probabaly raise
                 raise
         except httpslib.BadStatusLine as e:
             log.debug("Unable to refresh entitlement certificates: Service currently unsupported.")
-            log.debug(e)
+            log.exception(e)
 
         return result
 
