@@ -414,7 +414,7 @@ class Certificate(object):
     def __init__(self, x509=None, path=None, version=None, serial=None, start=None,
             end=None, subject=None, pem=None, issuer=None):
 
-        # The X509 M2crypto object for this certificate.
+        # The rhsm._certificate X509 object for this certificate.
         # WARNING: May be None in tests
         self.x509 = x509
 

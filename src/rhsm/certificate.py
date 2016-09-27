@@ -15,9 +15,6 @@
 
 """
 Contains classes for working with x.509 certificates.
-The backing implementation is M2Crypto.X509 which has insufficient
-support for custom v3 extensions.  It is not intended to be a
-replacement of full wrapper but instead an extension.
 
 Several of the classes in this module are now marked deprecated in favor
 of their new counterparts in certificate2 module. However, rather than
@@ -28,12 +25,12 @@ Eventually the deprecated classes below will be removed, and the new classes
 will be relocated into this module.
 """
 
+import dateutil
 import os
 import re
-from M2Crypto import X509, RSA
 from datetime import datetime as dt
 from datetime import tzinfo, timedelta
-from time import strptime
+from rhsm import _certificate
 from subprocess import Popen, PIPE, STDOUT
 import logging
 import warnings
@@ -74,43 +71,23 @@ def parse_tags(tag_str):
     return tags
 
 
-# from M2Crypto
 class UTC(tzinfo):
-    def tzname(self, date_time):
+    """UTC"""
+
+    _ZERO = timedelta(0)
+
+    def utcoffset(self, dt):
+        return self._ZERO
+
+    def tzname(self, dt):
         return "UTC"
 
-    def dst(self, date_time):
-        return timedelta(0)
-
-    def utcoffset(self, date_time):
-        return timedelta(0)
-
-    def __repr__(self):
-        return "<Timezone: %s>" % self.tzname(None)
+    def dst(self, dt):
+        return self._ZERO
 
 
-# m2Crypto available in 5.7 doesn't have the get_datetime, so
-# include the funtionality here
 def get_datetime_from_x509(date):
-    date_str = str(date)
-
-    if ' ' not in date_str:
-        raise ValueError("Invalid date: %s" % date_str)
-    month, rest = date_str.split(' ', 1)
-    _ssl_months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug",
-                   "Sep", "Oct", "Nov", "Dec"]
-
-    if month not in _ssl_months:
-        raise ValueError("Invalid date %s: Invalid month: %s" % (date_str, month))
-    if rest.endswith(' GMT'):
-        timezone = UTC()
-        rest = rest[:-4]
-
-    tm = list(strptime(rest, "%d %H:%M:%S %Y"))[:6]
-    tm[1] = _ssl_months.index(month) + 1
-    tm.append(0)
-    tm.append(timezone)
-    return dt(*tm)
+    return dateutil.parser.parse(date)
 
 
 def deprecated(func):
@@ -132,7 +109,7 @@ class Certificate(object):
     """
     Represents and x.509 certificate.
 
-    :ivar x509: The :obj:`M2Crypto.X509` backing object.
+    :ivar x509: The :obj:`X509` backing object.
     :type x509: :class:`X509`
     :ivar __ext: A dictionary of extensions `OID`:value
     :type __ext: dict of :obj:`Extensions`
@@ -148,35 +125,16 @@ class Certificate(object):
 
     def _update(self, content):
         if content:
-            x509 = X509.load_cert_string(content)
+            x509 = _certificate.load(pem=content)
         else:
-            x509 = X509.X509()
+            x509 = _certificate.X509()
         self.__ext = Extensions(x509)
         self.x509 = x509
 
-        self._parse_subject()
+        self.subj = self.x509.get_subject()
         self.serial = self.x509.get_serial_number()
 
-        self.altName = None
-        try:
-            name_ext = self.x509.get_ext('subjectAltName')
-            if name_ext:
-                self.altName = name_ext.get_value()
-        except LookupError:
-            # This may not be defined, seems to only be used for identity
-            # certificates:
-            pass
-
-    def _parse_subject(self):
-        self.subj = {}
-        subject = self.x509.get_subject()
-        subject.nid['UID'] = 458
-        for key, nid in subject.nid.items():
-            entry = subject.get_entries_by_nid(nid)
-            if len(entry):
-                asn1 = entry[0].get_data()
-                self.subj[key] = str(asn1)
-                continue
+        self.altName = x509.get_extension(name='subjectAltName')
 
     def serialNumber(self):
         """
@@ -580,9 +538,9 @@ class Key(object):
     def bogus(self):
         bogus = []
         if self.content:
-            try:
-                RSA.load_key_string(self.content)
-            except Exception:
+            # TODO handle public keys too? class docstring seems to indicate so
+            key = _certificate.load_private_key(pem=self.content)
+            if not key:
                 bogus.append("Invalid key data")
         else:
             bogus.append("No key data provided")
@@ -709,7 +667,7 @@ class Extensions(dict):
 
     def __init__(self, x509):
         """
-        :param x509: An :module:`m2crypto` :class:`X509` object or dict.
+        :param x509: An :module:`rhsm._certificate` :class:`X509` object or dict.
         :type x509: :obj:`X509`
         """
         if isinstance(x509, dict):
@@ -806,7 +764,6 @@ class Extensions(dict):
 
     def _get_extensions_block(self, x509):
         """ Isolate the block of text with the extensions. """
-        text = x509.as_text()
         p = Popen(['openssl', 'x509', '-text', '-certopt', 'ext_parse'],
                 stdout=PIPE, stdin=PIPE, stderr=STDOUT)
         text = p.communicate(input=x509.as_pem())[0]
@@ -818,7 +775,7 @@ class Extensions(dict):
 
     def _parse(self, x509):
         """
-        Parse the extensions section. Expects an :module:`m2crypto` :class:`X509` object.
+        Parse the extensions section. Expects an :module:`rhsm._certificate` :class:`X509` object.
         """
         oid = None
         for entry in self._get_extensions_block(x509):
