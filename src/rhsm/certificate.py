@@ -126,6 +126,8 @@ class Certificate(object):
     def _update(self, content):
         if content:
             x509 = _certificate.load(pem=content)
+            if x509 is None:
+                raise CertificateException("Error loading certificate")
         else:
             x509 = _certificate.X509()
         self.__ext = Extensions(x509)
