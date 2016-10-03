@@ -8,6 +8,9 @@
 # simplejson is not available in RHEL 7 at all.
 %global use_simplejson (0%{?rhel} && 0%{?rhel} == 5)
 
+# on non-EOL Fedora and RHEL 7, let's not use m2crypto
+%global use_m2crypto (0%{?fedora} < 23 && 0%{?rhel} < 7)
+
 %global _hardened_build 1
 %{!?__global_ldflags: %global __global_ldflags -Wl,-z,relro -Wl,-z,now}
 
@@ -30,7 +33,9 @@ BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 %if 0%{?sles_version}
 Requires: python-m2crypto
 %else
+%if %use_m2crypto
 Requires: m2crypto
+%endif
 %endif
 Requires: python-iniparse
 Requires: rpm-python
