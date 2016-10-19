@@ -30,10 +30,10 @@ Source0: %{name}-%{version}.tar.gz
 URL: http://www.candlepinproject.org
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
+%if %use_m2crypto
 %if 0%{?sles_version}
 Requires: python-m2crypto
 %else
-%if %use_m2crypto
 Requires: m2crypto
 %endif
 %endif

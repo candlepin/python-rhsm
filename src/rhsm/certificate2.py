@@ -85,7 +85,7 @@ class _CertFactory(object):
             extensions = _Extensions2(x509)
             redhat_oid = OID(REDHAT_OID_NAMESPACE)
             # Trim down to only the extensions in the Red Hat namespace:
-            extensions = extensions.ltrim(len(redhat_oid))
+            extensions = extensions.branch(redhat_oid)
             # Check the certificate version, absence of the extension implies v1.0:
             cert_version_str = "1.0"
             if EXT_CERT_VERSION in extensions:

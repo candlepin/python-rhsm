@@ -31,7 +31,6 @@ import re
 from datetime import datetime as dt
 from datetime import tzinfo, timedelta
 from rhsm import _certificate
-from subprocess import Popen, PIPE, STDOUT
 import logging
 import warnings
 
@@ -308,11 +307,16 @@ class RedhatCertificate(Certificate):
 
     REDHAT = '1.3.6.1.4.1.2312.9'
 
+    def __init__(self, *args, **kwargs):
+        super(RedhatCertificate, self).__init__(*args, **kwargs)
+        self._extract_redhat_extensions()
+
+    def _extract_redhat_extensions(self):
+        self.__redhat = self.extensions().branch(self.REDHAT)
+
     def _update(self, content):
         Certificate._update(self, content)
-        redhat = OID(self.REDHAT)
-        n = len(redhat)
-        self.__redhat = self.extensions().ltrim(n)
+        self._extract_redhat_extensions()
 
     def redhat(self):
         """
@@ -321,10 +325,7 @@ class RedhatCertificate(Certificate):
         :return: The extensions with the Red Hat namespace trimmed.
         :rtype: :class:`Extensions`
         """
-        try:
-            return self.__redhat
-        except Exception:
-            return self.extensions()
+        return self.__redhat
 
     def bogus(self):
         bogus = Certificate.bogus(self)
@@ -764,32 +765,13 @@ class Extensions(dict):
             d[trimmed] = v
         return Extensions(d)
 
-    def _get_extensions_block(self, x509):
-        """ Isolate the block of text with the extensions. """
-        p = Popen(['openssl', 'x509', '-text', '-certopt', 'ext_parse'],
-                stdout=PIPE, stdin=PIPE, stderr=STDOUT)
-        text = p.communicate(input=x509.as_pem())[0]
-
-        start = text.find('extensions:')
-        end = text.rfind('Signature Algorithm:')
-        text = text[start:end]
-        return [s.strip() for s in text.split('\n')]
-
     def _parse(self, x509):
         """
-        Parse the extensions section. Expects an :module:`rhsm._certificate` :class:`X509` object.
+        Parse the extensions. Expects an :module:`rhsm._certificate` :class:`X509` object.
         """
-        oid = None
-        for entry in self._get_extensions_block(x509):
-            if oid is not None:
-                m = VALUE_PATTERN.match(entry)
-                self[oid] = m.group(2).strip()
-                oid = None
-                continue
-            m = OID_PATTERN.match(entry)
-            if m is None:
-                continue
-            oid = OID(entry[:-1])
+        for oid, value in x509.get_all_extensions().items():
+            oid = OID(oid)
+            self[oid] = value
 
     def __str__(self):
         s = []

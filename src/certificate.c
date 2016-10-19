@@ -107,7 +107,7 @@ static PyMethodDef x509_methods[] = {
 	{"as_pem", (PyCFunction) as_pem, METH_VARARGS,
 	 "return the pem representation of this certificate"},
 	{"as_text", (PyCFunction) as_text, METH_VARARGS,
-	 "return the text representation of this certificate"},
+	 "return the text representation of this certificate (such as printed by openssl x509 -noout -text)"},
 	{NULL}
 };
 
