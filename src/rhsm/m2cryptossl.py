@@ -1,5 +1,3 @@
-# A compatibility wrapper that adapts m2crypto to the subset of standard lib ssl used in python-rhsm.
-#
 # Copyright (c) 2016 Red Hat, Inc.
 #
 # This software is licensed to you under the GNU General Public License,
@@ -13,6 +11,9 @@
 # granted to use or replicate Red Hat trademarks that are incorporated
 # in this software or its documentation.
 #
+
+# A compatibility wrapper that adapts m2crypto to the subset of standard
+# lib ssl used in python-rhsm.
 
 from M2Crypto import m2 as _m2, SSL as _ssl
 
