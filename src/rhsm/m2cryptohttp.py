@@ -15,8 +15,11 @@
 #
 
 import httplib
-from M2Crypto import httpslib, SSL
+import inspect
 import socket
+
+from M2Crypto import httpslib, SSL
+from M2Crypto.SSL import timeout
 
 # constants from actual httplib
 HTTP_PORT = httplib.HTTP_PORT
@@ -90,6 +93,9 @@ CannotSendHeader = httplib.CannotSendHeader
 ResponseNotReady = httplib.ResponseNotReady
 BadStatusLine = httplib.BadStatusLine
 
+# detect whether we support IPv6 or not
+HAS_IPV6_SUPPORT = 'family' in inspect.getargspec(SSL.Connection.__init__).args
+
 
 class _RhsmProxyHTTPSConnection(httpslib.ProxyHTTPSConnection):
     def __init__(self, host, *args, **kwargs):
@@ -134,15 +140,26 @@ class _RhsmHTTPSConnection(httpslib.HTTPSConnection):
         httpslib.HTTPSConnection.__init__(self, host, *args, **kwargs)
 
     def connect(self):
-        """Copied verbatim except for adding the timeout"""
+        """Copied verbatim except for adding the timeout.
+
+        Later edited for compatiblity with pre-IPv6 m2crypto.
+        """
         error = None
         # We ignore the returned sockaddr because SSL.Connection.connect needs
         # a host name.
         for (family, _, _, _, _) in socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM):
             sock = None
             try:
-                sock = SSL.Connection(self.ssl_ctx, family=family)
-                sock.settimeout(self.rhsm_timeout)
+                if HAS_IPV6_SUPPORT:
+                    sock = SSL.Connection(self.ssl_ctx, family=family)
+                else:  # support pre IPv6 versions of m2crypto
+                    sock = SSL.Connection(self.ssl_ctx)
+                if hasattr(sock, 'settimeout'):
+                    sock.settimeout(self.rhsm_timeout)
+                elif self.rhsm_timeout > 0:
+                    timeout_struct = timeout(self.rhsm_timeout)
+                    sock.set_socket_write_timeout(timeout_struct)
+                    sock.set_socket_read_timeout(timeout_struct)
                 if self.session is not None:
                     sock.set_session(self.session)
                 sock.connect((self.host, self.port))
