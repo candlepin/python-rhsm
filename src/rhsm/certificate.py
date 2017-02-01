@@ -46,6 +46,7 @@ OID_PATTERN = re.compile('([0-9]+\.)+[0-9]+:')
 VALUE_PATTERN = re.compile('.*prim:\s(\w*)\s*:*(.*)')
 
 
+
 # NOTE: These factory methods create new style certificate objects from
 # the certificate2 module. They are placed here to abstract the fact that
 # we're using two modules for the time being. Eventually the certificate2 code
