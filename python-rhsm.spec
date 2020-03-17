@@ -15,7 +15,7 @@
 %{!?__global_ldflags: %global __global_ldflags -Wl,-z,relro -Wl,-z,now}
 
 Name: python-rhsm
-Version: 1.19.1
+Version: 1.19.2
 Release: 1%{?dist}
 
 Summary: A Python library to communicate with a Red Hat Unified Entitlement Platform
@@ -102,6 +102,11 @@ rm -rf %{buildroot}
 %attr(644,root,root) %{_sysconfdir}/rhsm/ca/*.pem
 
 %changelog
+* Tue Mar 17 2020 Christopher Snyder <csnyder@redhat.com> 1.19.2-1
+- Add iniparse as install_requirement (csnyder@redhat.com)
+- Add consumer content API to python-rhsm (khowell@redhat.com)
+- Fix string comparison missed in python3 PR (khowell@redhat.com)
+
 * Wed Jan 25 2017 Alex Wood <awood@redhat.com> 1.19.1-1
 - Adjust our C bindings for OpenSSL v1.1 API. (awood@redhat.com)
 - Make python-rhsm Python-3 compatible (khowell@redhat.com)
