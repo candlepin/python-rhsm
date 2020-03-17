@@ -120,4 +120,5 @@ setup(
         'Intended Audience :: Information Technology',
         'Programming Language :: Python'
     ],
+    install_requires=['iniparse'],
 )
