@@ -544,10 +544,10 @@ get_issuer (certificate_x509 *self, PyObject *args)
 }
 
 static PyObject *
-time_to_string (ASN1_UTCTIME *time)
+time_to_string (ASN1_TIME *time)
 {
 	BIO *bio = BIO_new (BIO_s_mem ());
-	ASN1_UTCTIME_print (bio, time);
+	ASN1_TIME_print (bio, time);
 
 	size_t size = BIO_ctrl_pending (bio);
 	char *buf = malloc (sizeof (char) * size);
@@ -562,14 +562,14 @@ time_to_string (ASN1_UTCTIME *time)
 static PyObject *
 get_not_before (certificate_x509 *self, PyObject *args)
 {
-	ASN1_UTCTIME *time = X509_get_notBefore (self->x509);
+	ASN1_TIME *time = X509_get_notBefore (self->x509);
 	return time_to_string (time);
 }
 
 static PyObject *
 get_not_after (certificate_x509 *self, PyObject *args)
 {
-	ASN1_UTCTIME *time = X509_get_notAfter (self->x509);
+	ASN1_TIME *time = X509_get_notAfter (self->x509);
 	return time_to_string (time);
 }
 
@@ -610,7 +610,11 @@ init_certificate (void)
 
 	certificate_x509_type.tp_new = PyType_GenericNew;
 	if (PyType_Ready (&certificate_x509_type) < 0) {
+	#if PY_MAJOR_VERSION >= 3
+		return NULL;
+	#else
 		return;
+	#endif
 	}
 
 	Py_INCREF (&certificate_x509_type);
@@ -619,7 +623,11 @@ init_certificate (void)
 
     private_key_type.tp_new = PyType_GenericNew;
 	if (PyType_Ready (&private_key_type) < 0) {
+	#if PY_MAJOR_VERSION >= 3
+		return NULL;
+	#else
 		return;
+	#endif
 	}
 
 	Py_INCREF (&private_key_type);

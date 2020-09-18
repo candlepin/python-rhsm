@@ -1,3 +1,5 @@
+from __future__ import print_function, division, absolute_import
+
 #
 # This module has been originally modified and enhanced from Red Hat Update
 # Agent's config module.
@@ -20,6 +22,7 @@ import os
 from iniparse import SafeConfigParser
 from iniparse.compat import NoOptionError, InterpolationMissingOptionError, NoSectionError
 import re
+import tempfile
 
 CONFIG_ENV_VAR = "RHSM_CONFIG"
 
@@ -52,12 +55,15 @@ SERVER_DEFAULTS = {
         'insecure': '0',
         'ssl_verify_depth': '3',
         'proxy_hostname': '',
+        'proxy_scheme': 'http',
         'proxy_user': '',
         'proxy_port': '',
         'proxy_password': '',
+        'no_proxy': '',
         }
 RHSM_DEFAULTS = {
         'baseurl': 'https://' + DEFAULT_CDN_HOSTNAME,
+        'repomd_gpg_url': '',
         'ca_cert_dir': DEFAULT_CA_CERT_DIR,
         'repo_ca_cert': '%(ca_cert_dir)sredhat-uep.pem',
         'productcertdir': '/etc/pki/product',
@@ -67,12 +73,18 @@ RHSM_DEFAULTS = {
         'full_refresh_on_yum': '0',
         'report_package_profile': '1',
         'plugindir': '/usr/share/rhsm-plugins',
-        'pluginconfdir': '/etc/rhsm/pluginconf.d'
+        'pluginconfdir': '/etc/rhsm/pluginconf.d',
+        'auto_enable_yum_plugins': '1',
+        'package_profile_on_trans': '0',
+        'inotify': '1',
+        'no_insights': '0',
         }
 
 RHSMCERTD_DEFAULTS = {
         'certcheckinterval': '240',
-        'autoattachinterval': '1440'
+        'autoattachinterval': '1440',
+        'splay': '1',
+        'disable': '0'
         }
 
 LOGGING_DEFAULTS = {
@@ -108,10 +120,34 @@ class RhsmConfigParser(SafeConfigParser):
         SafeConfigParser.__init__(self)
         self.read(self.config_file)
 
+    def read(self, file_names=None):
+        """
+        Read configuration files. When configuration files are not specified, then read self.config_file
+        :param file_names: list of configuration files
+        :return: number of configuration files read
+        """
+        if file_names is None:
+            return super(RhsmConfigParser, self).read(self.config_file)
+        else:
+            return super(RhsmConfigParser, self).read(file_names)
+
     def save(self, config_file=None):
         """Writes config file to storage."""
-        fo = open(self.config_file, "wb")
-        self.write(fo)
+        rhsm_conf_dir = os.path.dirname(self.config_file)
+
+        # When /etc/rhsm does not exist, then try to create it
+        if os.path.isdir(rhsm_conf_dir) is False:
+            os.makedirs(rhsm_conf_dir)
+
+        with tempfile.NamedTemporaryFile(mode="w", dir=rhsm_conf_dir, delete=False) as fo:
+            self.write(fo)
+            fo.flush()
+            try:
+                mode = os.stat(self.config_file).st_mode
+            except IOError:
+                mode = 0o644
+            os.rename(fo.name, self.config_file)
+            os.chmod(self.config_file, mode)
 
     def get(self, section, prop):
         """Get a value from rhsm config.
@@ -129,7 +165,7 @@ class RhsmConfigParser(SafeConfigParser):
         try:
             return SafeConfigParser.get(self, section, prop)
         except InterpolationMissingOptionError:
-            #if there is an interpolation error, resolve it
+            # if there is an interpolation error, resolve it
             raw_val = super(RhsmConfigParser, self).get(section, prop, True)
             interpolations = re.findall("%\((.*?)\)s", raw_val)
             changed = False
@@ -193,7 +229,7 @@ class RhsmConfigParser(SafeConfigParser):
     def defaults(self):
         result = []
         for section in DEFAULTS:
-            result += [(key, value) for (key, value) in DEFAULTS[section].items()]
+            result += [(key, value) for (key, value) in list(DEFAULTS[section].items())]
         return dict(result)
 
     def sections(self):
@@ -219,7 +255,7 @@ class RhsmConfigParser(SafeConfigParser):
             for key in super_result:
                 if self.get(section, key) and len(self.get(section, key).strip()) > 0:
                     result[key] = self.get(section, key)
-        return result.items()
+        return list(result.items())
 
     def options(self, section):
         # This is necessary because with the way we handle defaults, parser.has_section('xyz')
@@ -286,29 +322,22 @@ class RhsmHostConfigParser(RhsmConfigParser):
             self.set('rhsm', 'entitlementcertdir', ent_cert_dir)
 
 
-def initConfig(config_file=None):
+def get_config_parser():
     """
     Get an :class:`RhsmConfig` instance
 
     Will use the first config file defined in the following list:
-
-    - argument to this method if provided (only for tests)
     - /etc/rhsm-host/rhsm.conf if it exists (only in containers)
     - /etc/rhsm/rhsm.conf
     """
     global CFG
-    # If a config file was specified, assume we should overwrite the global config
-    # to use it. This should only be used in testing. Could be switch to env var?
-    if config_file:
-        CFG = RhsmConfigParser(config_file=config_file)
-        return CFG
 
     try:
         CFG = CFG
     except NameError:
         CFG = None
-    if CFG is None:
 
+    if CFG is None:
         # Load alternate config file implementation if we detect that we're
         # running in a container.
         if in_container():
@@ -318,3 +347,8 @@ def initConfig(config_file=None):
             CFG = RhsmConfigParser(config_file=DEFAULT_CONFIG_PATH)
 
     return CFG
+
+
+# Deprecated but still in use by other applications
+def initConfig(configFile=None):
+    return get_config_parser()

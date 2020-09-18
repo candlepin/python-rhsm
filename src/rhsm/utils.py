@@ -1,3 +1,5 @@
+from __future__ import print_function, division, absolute_import
+
 #
 # Copyright (c) 2012 Red Hat, Inc.
 #
@@ -13,17 +15,13 @@
 # in this software or its documentation.
 #
 
-import gettext
 import os
 import re
-try:
-    from urllib.parse import urlparse
-except ImportError:
-    from urlparse import urlparse
+import sys
+
+import six.moves.urllib.parse
 
 from rhsm.config import DEFAULT_PROXY_PORT
-
-_ = lambda x: gettext.ldgettext("rhsm", x)
 
 
 def remove_scheme(uri):
@@ -67,6 +65,29 @@ class UnsupportedOperationException(Exception):
     a newer API is available.
     """
     pass
+
+
+def which(program):
+    """
+    Function returning path of program (it could be path to executable file or command)
+    :param program: string with command
+    :return: Path to command, when some executable exists in system. Otherwise it returns None.
+    """
+
+    def is_exe(_fpath):
+        return os.path.isfile(_fpath) and os.access(_fpath, os.X_OK)
+
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+
+    return None
 
 
 def has_bad_scheme(url):
@@ -146,7 +167,7 @@ def parse_url(local_server_entry,
 
     #FIXME: need a try except here? docs
     # don't seem to indicate any expected exceptions
-    result = urlparse(good_url)
+    result = six.moves.urllib.parse.urlparse(good_url)
     username = default_username
     password = default_password
     #netloc = result[1].split(":")
@@ -257,3 +278,39 @@ def cmd_name(argv):
         cmd_name_string = "initial-setup"
 
     return cmd_name_string
+
+
+def fix_no_proxy():
+    """
+    This fixes no_proxy/NO_PROXY environment to not include leading
+    asterisk, because there is some imperfection in proxy_bypass_environment.
+    """
+
+    # This fixes BZ: 1443164, because proxy_bypass_environment() from urllib does
+    # not support no_proxy with items containing asterisk (e.g.: *.redhat.com)
+
+    no_proxy = os.environ.get('no_proxy') or os.environ.get('NO_PROXY')
+    if no_proxy is not None:
+        if no_proxy != '*':
+            # Remove all leading white spaces and asterisks from items of no_proxy
+            # except item containing only "*" (urllib supports alone asterisk).
+            no_proxy = ','.join([item.lstrip(' *') for item in no_proxy.split(',')])
+            # Save no_proxy back to 'no_proxy' and 'NO_PROXY'
+            os.environ['no_proxy'] = no_proxy
+            os.environ['NO_PROXY'] = no_proxy
+
+
+def suppress_output(func):
+    def wrapper(*args, **kwargs):
+        try:
+            devnull = open(os.devnull, 'w')
+            stdout = sys.stdout
+            stderr = sys.stderr
+            sys.stdout = devnull
+            sys.stderr = devnull
+            return func(*args, **kwargs)
+        finally:
+            sys.stdout = stdout
+            sys.stderr = stderr
+            devnull.close()
+    return wrapper

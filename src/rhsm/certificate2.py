@@ -1,3 +1,5 @@
+from __future__ import print_function, division, absolute_import
+
 #
 # Copyright (c) 2012 Red Hat, Inc.
 #
@@ -12,12 +14,12 @@
 # granted to use or replicate Red Hat trademarks that are incorporated
 # in this software or its documentation.
 #
-
 import base64
 import logging
 import os
 import posixpath
 import re
+import six
 import zlib
 
 log = logging.getLogger(__name__)
@@ -45,6 +47,8 @@ PRODUCT_CERT = 1
 ENTITLEMENT_CERT = 2
 IDENTITY_CERT = 3
 
+CONTENT_ACCESS_CERT_TYPE = "OrgLevel"
+
 
 class _CertFactory(object):
     """
@@ -65,9 +69,8 @@ class _CertFactory(object):
         """
         try:
             pem = open(path, 'r').read()
-        except IOError as e:
-            print(os.strerror(e.errno))
-            exit(1)
+        except IOError as err:
+            raise CertificateException("Error loading certificate: %s" % err)
         return self._read_x509(_certificate.load(path), path, pem)
 
     def create_from_pem(self, pem, path=None):
@@ -80,7 +83,12 @@ class _CertFactory(object):
 
     def _read_x509(self, x509, path, pem):
         if not x509:
-            raise CertificateException("Error loading certificate")
+            if path is not None:
+                raise CertificateException("Error loading certificate: %s" % path)
+            elif pem is not None:
+                raise CertificateException("Error loading certificate from string: %s" % pem)
+            else:
+                raise CertificateException("Error: none certificate data offered")
         # Load the X509 extensions so we can determine what we're dealing with:
         try:
             extensions = _Extensions2(x509)
@@ -116,7 +124,14 @@ class _CertFactory(object):
             return self._create_v1_prod_cert(version, extensions, x509, path)
 
     def _read_alt_name(self, x509):
-        return x509.get_extension(name='subjectAltName').decode('utf-8')
+        """Try to read subjectAltName from certificate"""
+        alt_name = x509.get_extension(name='subjectAltName')
+        # When certificate does not include subjectAltName, then
+        # return emtpy string
+        if alt_name is None:
+            return ''
+        else:
+            return alt_name.decode('utf-8')
 
     def _read_issuer(self, x509):
         return x509.get_issuer()
@@ -195,7 +210,7 @@ class _CertFactory(object):
                 'brand_type': ext.get('5'),
                 'brand_name': ext.get('6'),
             }
-            for key, value in product_data.items():
+            for key, value in list(product_data.items()):
                 if value is not None:
                     product_data[key] = value.decode('utf-8')
             product_data['provided_tags'] = parse_tags(product_data['provided_tags'])
@@ -204,6 +219,7 @@ class _CertFactory(object):
 
     def _parse_v1_order(self, extensions):
         order_extensions = extensions.branch(ORDER_NAMESPACE)
+        # TODO: implement reading syspurpose attributes: usage, roles and addons, when they are implemented
         order_data = {
             'name': order_extensions.get('1'),
             'number': order_extensions.get('2'),
@@ -222,7 +238,7 @@ class _CertFactory(object):
             'stacking_id': order_extensions.get('17'),
             'virt_only': order_extensions.get('18'),
         }
-        for key, value in order_data.items():
+        for key, value in list(order_data.items()):
             if value is not None:
                 order_data[key] = value.decode('utf-8')
         order = Order(**order_data)
@@ -245,7 +261,7 @@ class _CertFactory(object):
                 'metadata_expire': content_ext.get('9'),
                 'required_tags': content_ext.get('10'),
             }
-            for key, value in content_data.items():
+            for key, value in list(content_data.items()):
                 if value is not None:
                     content_data[key] = value.decode('utf-8')
             content_data['required_tags'] = parse_tags(content_data['required_tags'])
@@ -328,7 +344,10 @@ class _CertFactory(object):
                 stacking_id=sub.get('stacking_id', None),
                 virt_only=sub.get('virt_only', False),
                 ram_limit=sub.get('ram', None),
-                core_limit=sub.get('cores', None)
+                core_limit=sub.get('cores', None),
+                roles=sub.get('roles', None),
+                usage=sub.get('usage', None),
+                addons=sub.get('addons', None)
             )
 
     def _parse_v3_products(self, payload):
@@ -418,7 +437,7 @@ class _Extensions2(Extensions):
         Override parent method for an X509 object from the new C wrapper.
         """
         extensions = x509.get_all_extensions()
-        for (key, value) in extensions.items():
+        for (key, value) in list(extensions.items()):
             oid = OID(key)
             self[oid] = value
 
@@ -468,12 +487,26 @@ class Certificate(object):
         gmt = gmt.replace(tzinfo=GMT())
         return self.valid_range.end() < gmt
 
-    def __cmp__(self, other):
-        if self.end < other.end:
-            return -1
-        if self.end > other.end:
-            return 1
-        return 0
+    def __lt__(self, other):
+        return self.end < other.end
+
+    def __le__(self, other):
+        return self.end < other.end
+
+    def __gt__(self, other):
+        return self.end > other.end
+
+    def __ge__(self, other):
+        return self.end > other.end
+
+    def __eq__(self, other):
+        return hasattr(other, 'serial') and self.serial == other.serial
+
+    def __ne__(self, other):
+        return not hasattr(other, 'serial') or self.serial != other.serial
+
+    def __hash__(self):
+        return self.serial
 
     def write(self, path):
         """
@@ -528,7 +561,10 @@ class EntitlementCertificate(ProductCertificate):
 
     @property
     def entitlement_type(self):
-        return self.extensions.get(EXT_ENT_TYPE) or 'Basic'
+        if self.extensions.get(EXT_ENT_TYPE):
+            return self.extensions.get(EXT_ENT_TYPE).decode('utf-8')
+        else:
+            return 'Basic'
 
     @property
     def _path_tree(self):
@@ -545,8 +581,16 @@ class EntitlementCertificate(ProductCertificate):
         if not self._path_tree_object:
             # generate and cache the tree
             data = self.extensions[EXT_ENT_PAYLOAD]
+            if not data:
+                raise AttributeError("Certificate has empty entitlement data extension")
             self._path_tree_object = PathTree(data)
         return self._path_tree_object
+
+    @property
+    def provided_paths(self):
+        paths = []
+        self._path_tree.build_path_list(paths)
+        return paths
 
     def is_expiring(self, on_date=None):
         gmt = datetime.utcnow()
@@ -590,7 +634,7 @@ class EntitlementCertificate(ProductCertificate):
         """
         path = path.strip('/')
         valid = False
-        for ext_oid, oid_url in self.extensions.items():
+        for ext_oid, oid_url in list(self.extensions.items()):
             oid_url = oid_url.decode('utf-8')
             # if this is a download URL
             if ext_oid.match(OID('2.')) and ext_oid.match(OID('.1.6')):
@@ -671,7 +715,7 @@ class Product(object):
         self.architectures = architectures
         # If this is sent in as a string split it, as the field
         # can technically be multi-valued:
-        if isinstance(self.architectures, str) or isinstance(self.architectures, type(u"")):
+        if isinstance(self.architectures, six.string_types):
             self.architectures = parse_tags(self.architectures)
         if self.architectures is None:
             self.architectures = []
@@ -698,7 +742,8 @@ class Order(object):
             contract=None, quantity_used=None, warning_period=None,
             account=None, provides_management=None, service_level=None,
             service_type=None, stacking_id=None, virt_only=None,
-            ram_limit=None, core_limit=None):
+            ram_limit=None, core_limit=None, roles=None, usage=None,
+            addons=None):
 
         self.name = name
         self.number = number  # order number
@@ -726,6 +771,9 @@ class Order(object):
 
         self.service_level = service_level
         self.service_type = service_type
+        self.usage = usage
+        self.roles = roles
+        self.addons = addons
 
         self.virt_only = virt_only or False
 

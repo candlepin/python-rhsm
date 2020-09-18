@@ -1,3 +1,5 @@
+from __future__ import print_function, division, absolute_import
+
 # from __future__ import unicode_literals FIXME see if necessary
 
 # Copyright (c) 2012 Red Hat, Inc.
@@ -15,6 +17,7 @@
 
 import itertools
 import zlib
+import six
 
 from rhsm.bitstream import GhettoBitStream
 from rhsm.huffman import HuffmanNode
@@ -81,6 +84,37 @@ class PathTree(object):
             raise ValueError('path must start with "/"')
         return self._traverse_tree(self.path_tree, path.strip('/').split('/'))
 
+    def __str__(self):
+        paths = []
+        self.build_path_list(paths)
+        return "\n".join(sorted(paths))
+
+    def build_path_list(self, acc, tree=None, curr_path=None):
+        """
+        Expand the Huffman tree into a list of paths.
+
+        :param tree:      A dict representing a node in the greater path tree.
+        :type  tree:      dict
+        :param acc:       an accumulator that stores the expanded paths. Callers should provide an empty list.
+        :type  acc:       list
+        :param curr_path: A string representing a path that is added to as nodes are visited.
+        :type  curr_path: str
+        """
+        if curr_path is None:
+            curr_path = ""
+        if tree is None:
+            tree = self.path_tree
+        # This should only be the case for the root node.  Just wrap it in a list so we can operate on it like
+        # all the other nodes.
+        if isinstance(tree, dict):
+            tree = [tree]
+        for branch in tree:
+            for k, v in six.iteritems(branch):
+                if k == PATH_END:
+                    acc.append(curr_path)
+                else:
+                    self.build_path_list(acc, tree=v, curr_path="%s/%s" % (curr_path, k))
+
     @classmethod
     def _traverse_tree(cls, tree, words):
         """
@@ -108,7 +142,7 @@ class PathTree(object):
 
             # we allow any word to match against entitlement variables
             # such as "$releasever".
-            for word in tree.keys():
+            for word in list(tree.keys()):
                 if word.startswith('$'):
                     words_to_try.append(word)
 
@@ -139,7 +173,7 @@ class PathTree(object):
         words = [word.decode('utf-8') for word in words]
 
         # enumerate() would be better here, but lacks a 'start' arg in 2.4
-        weighted_words = zip(itertools.count(1), words)
+        weighted_words = list(zip(itertools.count(1), words))
         # huffman nodes, without having put them in a tree. These will all be
         # leaves in the tree.
         nodes = [
@@ -180,7 +214,7 @@ class PathTree(object):
     def _generate_path_leaves(cls, bitstream):
         """
         Given the remaining bits after decompressing the word list, this
-        generates HummanNode objects to represent each node (besides root)
+        generates HuffmanNode objects to represent each node (besides root)
         that will end up in the path tree.
 
         :param bitstream:   stream of bits remaining after decompressing the

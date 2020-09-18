@@ -1,3 +1,5 @@
+from __future__ import print_function, division, absolute_import
+
 #
 # Copyright (c) 2010 - 2012 Red Hat, Inc.
 #
@@ -24,7 +26,6 @@ automatically create the correct object for any given certificate.
 Eventually the deprecated classes below will be removed, and the new classes
 will be relocated into this module.
 """
-
 import dateutil
 import os
 import re
@@ -121,6 +122,7 @@ class Certificate(object):
         :type content: str
         """
         self._update(content)
+        self.path = None
 
     def _update(self, content):
         if content:
@@ -522,7 +524,7 @@ class Key(object):
         Read the key.
 
         :param pem_path: The path to the .pem file.
-        :type path: str
+        :type pem_path: str
         """
         f = open(pem_path)
         content = f.read()
@@ -537,6 +539,7 @@ class Key(object):
         :type content: str
         """
         self.content = content
+        self.path = None
 
     def bogus(self):
         bogus = []
@@ -554,15 +557,15 @@ class Key(object):
         """
         Write the key.
 
-        :param path: The path to the .pem file.
-        :type path: str
+        :param pem_path: The path to the .pem file.
+        :type pem_path: str
         :return: self
         """
         f = open(pem_path, 'w')
         f.write(self.content)
         self.path = pem_path
         f.close()
-        os.chmod(pem_path, 0o600)
+        os.chmod(pem_path, 0o644)
         return self
 
     def delete(self):
@@ -578,7 +581,7 @@ class Key(object):
         return self.content
 
 
-class DateRange:
+class DateRange(object):
     """
     Date range object.
 
@@ -688,7 +691,7 @@ class Extensions(dict):
         :rtype: :class:`Extensions`
         """
         d = {}
-        for oid, v in self.items():
+        for oid, v in list(self.items()):
             d[oid.ltrim(n)] = v
         return Extensions(d)
 
@@ -732,7 +735,7 @@ class Extensions(dict):
 
         # Only order the keys if we want more than a singel return avalue
         if ignoreOrder:
-            keyset = self.keys()
+            keyset = list(self.keys())
         else:
             keyset = sorted(self.keys())
 
@@ -769,13 +772,13 @@ class Extensions(dict):
         """
         Parse the extensions. Expects an :module:`rhsm._certificate` :class:`X509` object.
         """
-        for oid, value in x509.get_all_extensions().items():
+        for oid, value in list(x509.get_all_extensions().items()):
             oid = OID(oid)
             self[oid] = value
 
     def __str__(self):
         s = []
-        for item in self.items():
+        for item in list(self.items()):
             s.append('%s = "%s"' % item)
         return '\n'.join(s)
 
@@ -944,7 +947,7 @@ class OID(object):
         return self._str
 
 
-class Order:
+class Order(object):
 
     @deprecated
     def __init__(self, ext):
@@ -1035,7 +1038,7 @@ class Order:
         return '\n'.join(s)
 
 
-class Product:
+class Product(object):
 
     @deprecated
     def __init__(self, p_hash, ext):
@@ -1089,7 +1092,7 @@ class Product:
         return str(self)
 
 
-class Entitlement:
+class Entitlement(object):
 
     def __init__(self, ext):
         self.ext = ext
